@@ -1,7 +1,0 @@
-[project]
-name = "da-chain"
-version = "0.1.0"
-description = "A blockchain module"
-readme = "README.md"
-requires-python = ">=3.13"
-dependencies = ["rsa>=4.9.1"]
