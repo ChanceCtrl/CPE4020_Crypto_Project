@@ -1,0 +1,255 @@
+/*
+ * EV Charging Station Simulator - R4 Uno WiFi
+ * Reads A0 potentiometer, signs telemetry with Ed25519,
+ * POSTs flat JSON to validator.
+ */
+
+#include <WiFiS3.h>
+#include <WiFiUdp.h>
+#include <ArduinoJson.h>
+#include <Ed25519.h>
+
+// ---------- CONFIG ----------
+const char* WIFI_SSID     = "EnzoiPhone";
+const char* WIFI_PASSWORD = "SIDIBE223";
+
+const char* VALIDATOR_HOST = "0.0.0.0";
+const uint16_t VALIDATOR_PORT = 8080;
+const char* VALIDATOR_PATH = "/";
+
+const float MAX_POWER_KW       = 150.0;
+const float PRICE_PER_KWH      = 0.20;
+const unsigned long SAMPLE_INTERVAL_MS = 5000;  // 5 s per sample
+
+// Pulic key : PUBLIC KEY  (32 bytes): 0x94, 0x6C, 0x7A, 0x37, 0xE6, 0x82, 0x96, 0x86, 0x56, 0x9F, 0x89, 0xE0, 0x6D, 0x25, 0xBE, 0x67, 0x1A, 0xEC, 0xF9, 0xFB, 0xED, 0xBD, 0xDE, 0xF9, 0x1E, 0xCD, 0x82, 0xA2, 0x24, 0x3A, 0xBD, 0xCD
+
+// 32-byte Ed25519 private seed — REPLACE with output from key-gen script
+const uint8_t PRIVATE_KEY_SEED[32] = {
+  0x3B, 0x2D, 0x4A, 0x60, 0xF9, 0xD4, 0x4C, 0x6B,
+  0xF6, 0x82, 0x6D, 0x5F, 0x35, 0xF0, 0xFE, 0xDF,
+  0xDD, 0xE2, 0x30, 0xAE, 0x4D, 0x82, 0xF1, 0x1D,
+  0x6E, 0x68, 0x67, 0x34, 0x0F, 0xCC, 0x83, 0x5D
+};
+
+// NTP
+const char* NTP_HOST = "pool.ntp.org";
+const uint16_t NTP_PORT = 123;
+const unsigned long NTP_UNIX_OFFSET = 2208988800UL;  // 1900 -> 1970
+
+// ---------- GLOBALS ----------
+const int POT_PIN = A0;
+uint8_t publicKey[32];
+char walletKeyHex[65];
+
+unsigned long lastSample = 0;
+unsigned long epochAtSync = 0;   // unix time captured at NTP sync
+unsigned long millisAtSync = 0;  // millis() value at that moment
+
+WiFiClient client;
+WiFiUDP udp;
+
+// ---------- HELPERS ----------
+void bytesToHex(const uint8_t* bytes, size_t len, char* out) {
+  const char* hex = "0123456789abcdef";
+  for (size_t i = 0; i < len; i++) {
+    out[i * 2]     = hex[(bytes[i] >> 4) & 0xF];
+    out[i * 2 + 1] = hex[bytes[i] & 0xF];
+  }
+  out[len * 2] = '\0';
+}
+
+void connectWiFi() {
+  Serial.println(F("---- WiFi diagnostic ----"));
+
+  // 1. Check firmware version of the radio module
+  String fv = WiFi.firmwareVersion();
+  Serial.print(F("Radio firmware: ")); Serial.println(fv);
+  Serial.print(F("Latest expected: ")); Serial.println(WIFI_FIRMWARE_LATEST_VERSION);
+
+  // 2. Scan for networks so we can see if the SSID is even visible
+  Serial.println(F("Scanning for networks..."));
+  int n = WiFi.scanNetworks();
+  if (n < 0) {
+    Serial.println(F("Scan failed"));
+  } else {
+    Serial.print(n); Serial.println(F(" networks found:"));
+    for (int i = 0; i < n; i++) {
+      Serial.print(F("  ["));
+      Serial.print(i);
+      Serial.print(F("] "));
+      Serial.print(WiFi.SSID(i));
+      Serial.print(F("  RSSI="));
+      Serial.print(WiFi.RSSI(i));
+      Serial.print(F(" dBm  enc="));
+      Serial.println(WiFi.encryptionType(i));
+    }
+  }
+
+  // 3. Attempt to connect with verbose status codes
+  Serial.print(F("Connecting to SSID: '"));
+  Serial.print(WIFI_SSID);
+  Serial.println(F("'"));
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) {
+    delay(1000);
+    Serial.print(F("  status=")); Serial.print(WiFi.status());
+    Serial.print(F("  (")); Serial.print((millis() - start) / 1000);
+    Serial.println(F("s)"));
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print(F("CONNECTED. IP=")); Serial.println(WiFi.localIP());
+    Serial.print(F("RSSI=")); Serial.println(WiFi.RSSI());
+  } else {
+    Serial.println(F("!! Failed to connect within 20s"));
+  }
+  Serial.println(F("-------------------------"));
+}
+
+// Basic NTP client — returns unix epoch seconds, or 0 on failure
+unsigned long fetchNTP() {
+  uint8_t pkt[48] = {0};
+  pkt[0] = 0b11100011;  // LI=3, Version=4, Mode=3 (client)
+
+  udp.begin(2390);
+  udp.beginPacket(NTP_HOST, NTP_PORT);
+  udp.write(pkt, 48);
+  udp.endPacket();
+
+  unsigned long t0 = millis();
+  while (millis() - t0 < 2000) {
+    if (udp.parsePacket() >= 48) {
+      udp.read(pkt, 48);
+      unsigned long secsSince1900 =
+        ((unsigned long)pkt[40] << 24) |
+        ((unsigned long)pkt[41] << 16) |
+        ((unsigned long)pkt[42] << 8)  |
+        ((unsigned long)pkt[43]);
+      udp.stop();
+      return secsSince1900 - NTP_UNIX_OFFSET;
+    }
+  }
+  udp.stop();
+  return 0;
+}
+
+void syncTime() {
+  Serial.print(F("NTP sync... "));
+  for (int i = 0; i < 5; i++) {
+    unsigned long t = fetchNTP();
+    if (t > 1700000000UL) {
+      epochAtSync = t;
+      millisAtSync = millis();
+      Serial.print(F("OK epoch=")); Serial.println(epochAtSync);
+      return;
+    }
+    delay(1000);
+  }
+  Serial.println(F("FAILED (using 0)"));
+}
+
+unsigned long currentEpoch() {
+  if (epochAtSync == 0) return 0;
+  return epochAtSync + (millis() - millisAtSync) / 1000UL;
+}
+
+float readPowerKW() {
+  long sum = 0;
+  const int N = 8;
+  for (int i = 0; i < N; i++) {
+    sum += analogRead(POT_PIN);
+    delayMicroseconds(200);
+  }
+  return ((sum / N) / 16383.0f) * MAX_POWER_KW;
+}
+
+// ---------- SAMPLE + SIGN + POST ----------
+void sampleAndSend() {
+  float powerKW = readPowerKW();
+  // energy delivered this tick = power * (interval in hours)
+  float kwh = powerKW * (SAMPLE_INTERVAL_MS / 1000.0f) / 3600.0f;
+
+  unsigned long ts = currentEpoch();
+
+  // Build the string that gets signed: canonical, pipe-delimited
+  char signingBuf[192];
+  // Round to 6 decimals for kwh, 2 for price
+  int n = snprintf(signingBuf, sizeof(signingBuf),
+                   "%s|%lu|%.6f|%.2f",
+                   walletKeyHex, ts, kwh, PRICE_PER_KWH);
+
+  // Sign
+  uint8_t signature[64];
+  Ed25519::sign(signature, PRIVATE_KEY_SEED, publicKey,
+                (const void*)signingBuf, n);
+
+  char sigHex[129];
+  bytesToHex(signature, 64, sigHex);
+
+  // Build the JSON payload
+  JsonDocument doc;
+  doc["walletKey"]    = walletKeyHex;
+  doc["timeStamp"]    = ts;
+  doc["kwh"]          = round(kwh * 1000000.0) / 1000000.0;  // 6 dp
+  doc["priceperkwh"]  = PRICE_PER_KWH;
+  doc["signature"]    = sigHex;
+
+  char body[768];
+  size_t bodyLen = serializeJson(doc, body, sizeof(body));
+
+  Serial.print(F("TX: ")); Serial.println(body);
+
+  // POST
+  if (!client.connect(VALIDATOR_HOST, VALIDATOR_PORT)) {
+    Serial.println(F("!! connect failed"));
+    return;
+  }
+  client.print(F("POST ")); client.print(VALIDATOR_PATH); client.println(F(" HTTP/1.1"));
+  client.print(F("Host: ")); client.println(VALIDATOR_HOST);
+  client.println(F("Content-Type: application/json"));
+  client.print(F("Content-Length: ")); client.println(bodyLen);
+  client.println(F("Connection: close"));
+  client.println();
+  client.write((const uint8_t*)body, bodyLen);
+
+  // Read response
+  unsigned long t0 = millis();
+  while (client.connected() && (millis() - t0 < 3000)) {
+    if (client.available()) {
+      String line = client.readStringUntil('\n');
+      Serial.print(F("RX: ")); Serial.println(line);
+      if (line == "\r") break;
+    }
+  }
+  while (client.available()) Serial.write(client.read());
+  client.stop();
+}
+
+// ---------- SETUP / LOOP ----------
+void setup() {
+  Serial.begin(115200);
+  while (!Serial && millis() < 3000) { ; }
+
+  analogReadResolution(14);
+
+  Ed25519::derivePublicKey(publicKey, PRIVATE_KEY_SEED);
+  bytesToHex(publicKey, 32, walletKeyHex);
+  Serial.print(F("walletKey: ")); Serial.println(walletKeyHex);
+
+  connectWiFi();
+  syncTime();
+}
+
+void loop() {
+  if (WiFi.status() != WL_CONNECTED) connectWiFi();
+  if (epochAtSync == 0) syncTime();
+
+  unsigned long now = millis();
+  if (now - lastSample >= SAMPLE_INTERVAL_MS) {
+    lastSample = now;
+    sampleAndSend();
+  }
+}
