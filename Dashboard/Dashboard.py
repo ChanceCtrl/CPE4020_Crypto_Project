@@ -10,11 +10,12 @@ app = Flask(__name__)
 # -----------------------
 validators = [{"id": i, "stake": random.randint(50, 200), "status": "active"} for i in range(5)]
 wallets = {f"0x{i:04X}": random.randint(100, 1000) for i in range(10)}
+
 blocks = []
 block_height = 0
 
 # -----------------------
-# Background Simulation
+# Blockchain Simulation
 # -----------------------
 def simulate_blockchain():
     global block_height
@@ -43,19 +44,17 @@ def simulate_blockchain():
                     "amount": amount
                 })
 
-        block = {
+        blocks.insert(0, {
             "height": block_height,
             "validator": validator["id"],
             "tx_count": len(transactions),
             "transactions": transactions,
             "time": time.strftime("%H:%M:%S")
-        }
+        })
 
-        blocks.insert(0, block)
-
-        if len(blocks) > 50:   # allow more history now
-            blocks.pop()
-
+        # OPTIONAL: cap history if needed later
+        # if len(blocks) > 20000:
+        #     blocks.pop()
 
 threading.Thread(target=simulate_blockchain, daemon=True).start()
 
@@ -78,7 +77,7 @@ HTML_PAGE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>DePIN Dashboard (Simulation)</title>
+    <title>DePIN Dashboard</title>
 
     <style>
         body {
@@ -117,21 +116,11 @@ HTML_PAGE = """
             margin: 0 0 10px 0;
         }
 
-        /* NETWORK + WALLET SCROLL (simple) */
         .scroll-box {
             flex: 1;
             overflow-y: auto;
             border-top: 1px solid #334155;
             padding-top: 10px;
-        }
-
-        /* BLOCKS: dedicated strong scroll region */
-        .blocks-scroll {
-            flex: 1;
-            overflow-y: auto;
-            border-top: 1px solid #334155;
-            padding-top: 10px;
-            scroll-behavior: smooth;
         }
 
         .block {
@@ -147,7 +136,7 @@ HTML_PAGE = """
 
 <body>
 
-<h1>DePIN Dashboard (Simulated)</h1>
+<h1>DePIN Dashboard (Full Chain History)</h1>
 
 <div class="container">
 
@@ -158,7 +147,7 @@ HTML_PAGE = """
 
     <div class="panel">
         <h2>Blocks</h2>
-        <div class="blocks-scroll" id="blocks"></div>
+        <div class="scroll-box" id="blocks"></div>
     </div>
 
     <div class="panel">
@@ -173,15 +162,28 @@ async function fetchData() {
     const res = await fetch('/api/data');
     const data = await res.json();
 
-    // Network
+    // -----------------------
+    // Total Coins Calculation
+    // -----------------------
+    let totalCoins = 0;
+    for (const bal of Object.values(data.wallets)) {
+        totalCoins += bal;
+    }
+
+    // -----------------------
+    // Network Panel
+    // -----------------------
     document.getElementById("network").innerHTML =
         "Block Height: " + data.block_height + "<br>" +
-        "Validators: " + data.validators.length;
+        "Validators: " + data.validators.length + "<br>" +
+        "Total Coins in Circulation: " + totalCoins;
 
-    // Blocks
-    let blocksHTML = "";
+    // -----------------------
+    // Blocks Panel
+    // -----------------------
+    let html = "";
     data.blocks.forEach(b => {
-        blocksHTML += `
+        html += `
             <div class="block">
                 <b>Block ${b.height}</b> | Validator ${b.validator} <br>
                 TXs: ${b.tx_count} | Time: ${b.time}
@@ -189,17 +191,16 @@ async function fetchData() {
         `;
     });
 
-    const blockDiv = document.getElementById("blocks");
-    blockDiv.innerHTML = blocksHTML;
+    document.getElementById("blocks").innerHTML = html;
 
-    // Auto-scroll to newest block (top since we insert newest first)
-    blockDiv.scrollTop = 0;
-
-    // Wallets
+    // -----------------------
+    // Wallets Panel
+    // -----------------------
     let walletsHTML = "";
     for (const [addr, bal] of Object.entries(data.wallets)) {
         walletsHTML += `${addr}: ${bal} coins<br>`;
     }
+
     document.getElementById("wallets").innerHTML = walletsHTML;
 }
 
