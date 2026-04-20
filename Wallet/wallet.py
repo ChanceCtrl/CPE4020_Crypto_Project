@@ -1,3 +1,4 @@
+from base64 import b64decode
 from json import dumps
 
 import rsa
@@ -23,17 +24,19 @@ class evWalletChain:
 
         return True
 
-    def auth_wallet(self, data: dict[str, str | int | float], signature: str) -> bool:
-        public_key = data.get("walletKey")
 
-        try:
-            rsa.verify(dumps(data), signature.encode(), PublicKey(public_key))
-        except Exception as E:
-            print(f"Error verifing: {E}")
-            return False
+def auth_wallet(data: dict, signature: bytes) -> bool:
+    try:
+        public_key = PublicKey.load_pkcs1(data["walletKey"].encode())
+
+        message = dumps(
+            {k: data[k] for k in data if k != "signature"}, sort_keys=True
+        ).encode()
+
+        rsa.verify(message, signature, public_key)
+
         return True
 
-
-# fella = evWalletChain()
-#
-# fella.register_new_wallet()
+    except Exception as e:
+        print(f"Error verifying: {e}")
+        return False
