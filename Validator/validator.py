@@ -1,9 +1,11 @@
 import time
 
 from flask import Flask, request, jsonify
+import json
 import hashlib
 import requests
 import rsa
+import threading
 
 app = Flask(__name__)
 
@@ -50,10 +52,10 @@ blockSize = 3
 
 # Used while we are tallying votes
 def check_consensus(hash):
-    vote_list = pending_requests[hash].votes
+    vote_list = pending_requests[hash]["votes"]
 
     approve = list(vote_list.values()).count("APPROVE")
-    deny = list(vote_list.values()).count("DENY")
+    deny = list(vote_list.values()).count("BLOCKED")
     total = len(vote_list)
 
     if approve > total / 2:
@@ -72,11 +74,16 @@ def validate_data(data):
     if sensorName not in knownWallets:
         return False
 
-    if 0 > kwh > 200:
+    if 0 < kwh < 200:
         return False
 
     if priceperkwh <= 0:
         return False
+
+    ## ADD CHECK FOR SIGNATURE STUFF
+
+    #should be valid!
+    return True
 
 def verify_signature(signature):
     #use the rsa_verify thingy
@@ -103,17 +110,18 @@ def post_data():
 
     # Store the message in the pending_push array and validate
     try:
-        pending_requests[hashlib.sha256(data.encode("utf-8")).hexdigest()] = {}
-        pending_requests[hashlib.sha256(data.encode("utf-8")).hexdigest()]["data"] = data
-        pending_requests[hashlib.sha256(data.encode("utf-8")).hexdigest()]["votes"] = {}
+        hash = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
+        pending_requests[hash] = {}
+        pending_requests[hash]["data"] = data
+        pending_requests[hash]["votes"] = {}
 
         if validate_data(data):
-            pending_requests[hashlib.sha256(data.encode("utf-8")).hexdigest()]["votes"][validatorAddresses["self"]] = "APPROVE"
+            pending_requests[hash]["votes"][validatorAddresses["self"]] = "APPROVE"
         else:
-            pending_requests[hashlib.sha256(data.encode("utf-8")).hexdigest()]["votes"][validatorAddresses["self"]] = "BLOCKED"
+            pending_requests[hash]["votes"][validatorAddresses["self"]] = "BLOCKED"
 
         # since this endpoint is used to deceminate the data, we need to broadcast to all other validators
-        for i, j in validatorAddresses:
+        for i, j in validatorAddresses.items():
             url = "http://" + j + "/propagatedata"
             try:
                 # Send POST request
@@ -138,14 +146,15 @@ def propagatedata():
 
     # Store the message in the pending_push array and validate
     try:
-        pending_requests[hashlib.sha256(data.encode("utf-8")).hexdigest()] = {}
-        pending_requests[hashlib.sha256(data.encode("utf-8")).hexdigest()]["data"] = data
-        pending_requests[hashlib.sha256(data.encode("utf-8")).hexdigest()]["votes"] = {}
+        hash = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
+        pending_requests[hash] = {}
+        pending_requests[hash]["data"] = data
+        pending_requests[hash]["votes"] = {}
 
         if validate_data(data):
-            pending_requests[hashlib.sha256(data.encode("utf-8"))].hexdigest()["votes"][validatorAddresses["self"]] = "APPROVE"
+            pending_requests[hash]["votes"][validatorAddresses["self"]] = "APPROVE"
         else:
-            pending_requests[hashlib.sha256(data.encode("utf-8"))].hexdigest()["votes"][validatorAddresses["self"]] = "BLOCKED"
+            pending_requests[hash]["votes"][validatorAddresses["self"]] = "BLOCKED"
 
         return "", 200
     except:
@@ -161,55 +170,60 @@ def request_vote():
     hash = data.get("hash")
 
     try:
-        if pending_requests[hash][validatorAddresses["self"]] == "APPROVE":
+        if pending_requests[hash]["votes"][validatorAddresses["self"]] == "APPROVE":
             return "", 205 #205 means I APPROVE
         else:
-            return "", 206 #206 means I DENY
+            return "", 206 #206 means I BLOCK
 
     except:
         return "", 404 #something bad happened
 
 
 @app.route("/viewledger")
-def show_report():
+def show_ledger():
     try:
         return jsonify(transaction_ledger), 200
     except:
         return "", 404
 
 @app.route("/viewledger/wallets")
-def show_report():
+def show_wallets():
     try:
         return jsonify(knownWallets), 200
     except:
         return "", 404
 
 @app.route("/viewledger/blockchain")
-def show_report():
+def show_blockchain():
     try:
         return jsonify(block_ledger), 200
     except:
         return "", 404
 
+def consensus_loop():
+    while True:
+        # check every 10 seconds the vote status for pending requests
+        time.sleep(10)
+
+        for i in list(pending_requests.keys()):
+            status = check_consensus(i)
+            if status == "confirmed":
+                transaction_ledger.append(pending_requests[i])  # add pending request to the ledger
+                knownWallets[pending_requests[i]["data"]["walletKey"]] += 1  # give a coin!
+                pending_requests.pop(i)  # accepted to remove
+            elif status == "denied":
+                pending_requests.pop(i)  # denied so remove
+
+        # add new transactions to blockchain
+        if (len(transaction_ledger) % blockSize == 0) and (len(block_ledger) > 0) and (
+                len(transaction_ledger) / blockSize > (len(block_ledger))):
+            # add every three new transactions to our blockchain
+            block_ledger.append(hashlib.sha256("|".join(str(transaction_ledger[-blockSize:])).encode('utf-8')).hexdigest())
+
+
 if __name__ == "__main__":
     HOST = "0.0.0.0"  # Use '0.0.0.0' to make the server accessible externally
     PORT = 4020  # Set your desired port number
+    threading.Thread(target=consensus_loop, daemon=True).start()
     app.run(host=HOST, port=PORT, debug=True)
 
-while True:
-    # check every 10 seconds the vote status for pending requests
-    time.sleep(10)
-
-    for i in pending_requests.keys():
-        status = check_consensus(i)
-        if status == "confirmed":
-            transaction_ledger[i] = pending_requests[i] #add pending request to the ledger
-            knownWallets[pending_requests[i]["data"].walletKey] += 1 #give a coin!
-            pending_requests.pop(i) #accepted to remove
-        elif status == "denied":
-            pending_requests.pop(i) #denied so remove
-
-    # add new transactions to blockchain
-    if (len(transaction_ledger)%blockSize == 0) and (len(block_ledger) > 0) and (len(transaction_ledger)/blockSize > (len(block_ledger))):
-        # add every three new transactions to our blockchain
-        block_ledger.append(hashlib.sha256("|".join(block_ledger).encode('utf-8')).hexdigest())
