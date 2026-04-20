@@ -53,15 +53,14 @@ def simulate_blockchain():
 
         blocks.insert(0, block)
 
-        if len(blocks) > 10:
+        if len(blocks) > 50:   # allow more history now
             blocks.pop()
 
 
-# Start simulation thread
 threading.Thread(target=simulate_blockchain, daemon=True).start()
 
 # -----------------------
-# API Routes
+# API
 # -----------------------
 @app.route("/api/data")
 def get_data():
@@ -72,49 +71,101 @@ def get_data():
         "blocks": blocks
     })
 
-
 # -----------------------
-# HTML Dashboard
+# UI
 # -----------------------
 HTML_PAGE = """
 <!DOCTYPE html>
 <html>
 <head>
     <title>DePIN Dashboard (Simulation)</title>
+
     <style>
-        body { font-family: Arial; background: #0f172a; color: white; }
-        h1 { text-align: center; }
-        .container { display: flex; gap: 20px; padding: 20px; }
+        body {
+            font-family: Arial;
+            background: #0f172a;
+            color: white;
+            margin: 0;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        h1 {
+            text-align: center;
+            margin: 10px 0;
+        }
+
+        .container {
+            display: flex;
+            gap: 20px;
+            padding: 20px;
+            height: calc(100vh - 60px);
+            box-sizing: border-box;
+        }
+
         .panel {
             background: #1e293b;
             padding: 15px;
             border-radius: 10px;
             flex: 1;
-            max-height: 400px;
-            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
         }
-        .block { border-bottom: 1px solid #334155; padding: 5px; }
+
+        .panel h2 {
+            margin: 0 0 10px 0;
+        }
+
+        /* NETWORK + WALLET SCROLL (simple) */
+        .scroll-box {
+            flex: 1;
+            overflow-y: auto;
+            border-top: 1px solid #334155;
+            padding-top: 10px;
+        }
+
+        /* BLOCKS: dedicated strong scroll region */
+        .blocks-scroll {
+            flex: 1;
+            overflow-y: auto;
+            border-top: 1px solid #334155;
+            padding-top: 10px;
+            scroll-behavior: smooth;
+        }
+
+        .block {
+            border-bottom: 1px solid #334155;
+            padding: 8px 5px;
+        }
+
+        .block b {
+            color: #60a5fa;
+        }
     </style>
 </head>
+
 <body>
 
 <h1>DePIN Dashboard (Simulated)</h1>
 
 <div class="container">
+
     <div class="panel">
         <h2>Network</h2>
-        <div id="network"></div>
+        <div class="scroll-box" id="network"></div>
     </div>
 
     <div class="panel">
         <h2>Blocks</h2>
-        <div id="blocks"></div>
+        <div class="blocks-scroll" id="blocks"></div>
     </div>
 
     <div class="panel">
         <h2>Wallets</h2>
-        <div id="wallets"></div>
+        <div class="scroll-box" id="wallets"></div>
     </div>
+
 </div>
 
 <script>
@@ -122,7 +173,7 @@ async function fetchData() {
     const res = await fetch('/api/data');
     const data = await res.json();
 
-    // Network Info
+    // Network
     document.getElementById("network").innerHTML =
         "Block Height: " + data.block_height + "<br>" +
         "Validators: " + data.validators.length;
@@ -137,7 +188,12 @@ async function fetchData() {
             </div>
         `;
     });
-    document.getElementById("blocks").innerHTML = blocksHTML;
+
+    const blockDiv = document.getElementById("blocks");
+    blockDiv.innerHTML = blocksHTML;
+
+    // Auto-scroll to newest block (top since we insert newest first)
+    blockDiv.scrollTop = 0;
 
     // Wallets
     let walletsHTML = "";
@@ -147,7 +203,6 @@ async function fetchData() {
     document.getElementById("wallets").innerHTML = walletsHTML;
 }
 
-// Refresh every 2 seconds
 setInterval(fetchData, 2000);
 fetchData();
 </script>
@@ -160,9 +215,8 @@ fetchData();
 def index():
     return render_template_string(HTML_PAGE)
 
-
 # -----------------------
-# Run Server
+# RUN
 # -----------------------
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
