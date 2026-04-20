@@ -1,3 +1,5 @@
+import time
+
 from flask import Flask, request, jsonify
 import hashlib
 import requests
@@ -13,8 +15,7 @@ knownWallets = {
 # Storage for validator IP addresses
 validatorAddresses = {
     "self": "[IP HERE]",
-    "validatorA": "[IP HERE]",
-    "validatorB": "[IP HERE]"
+    "validatorA": "[IP HERE]"
 }
 
 # This is the format we expect from the sensor
@@ -26,6 +27,7 @@ exampledata = {
     "signature": "[DIGITAL SIGNATURE USING PRIVATE KEY]"
 }
 
+#this is the format we will save transactions as
 exampleTransaction = {
     "walletKey": "[PUBLIC KEY]",
     "timeStamp": 0,
@@ -37,7 +39,7 @@ exampleTransaction = {
 # Voting and Consensus Stuff
 pending_requests = {}
 
-#once approved, push new transactions to entire ledger
+#Once approved, push new transactions to entire ledger
 transaction_ledger = {}
 
 #every three transactions get hashed into a block and added here
@@ -47,14 +49,16 @@ blockSize = 3
 
 # Used while we are tallying votes
 def check_consensus(hash):
-    vote_list = pending_requests[hash]
+    vote_list = pending_requests[hash].votes
 
-    approve = list(vote_list.values()).count("approve")
+    approve = list(vote_list.values()).count("APPROVE")
+    deny = list(vote_list.values()).count("DENY")
     total = len(vote_list)
 
     if approve > total / 2:
         return "confirmed"
-
+    elif deny > total / 2:
+            return "denied"
     return "pending"
 
 
@@ -98,9 +102,9 @@ def post_data():
         pending_requests[hashlib.sha256(data.encode("utf-8"))] = {}
 
         if validate_data(data):
-            pending_requests[hashlib.sha256(data.encode("utf-8"))][validatorAddresses["self"]] = "APPROVE"
+            pending_requests[hashlib.sha256(data.encode("utf-8"))].votes[validatorAddresses["self"]] = "APPROVE"
         else:
-            pending_requests[hashlib.sha256(data.encode("utf-8"))][validatorAddresses["self"]] = "BLOCKED"
+            pending_requests[hashlib.sha256(data.encode("utf-8"))].votes[validatorAddresses["self"]] = "BLOCKED"
 
         # since this endpoint is used to deceminate the data, we need to broadcast to all other validators
         for i, j in validatorAddresses:
@@ -165,8 +169,34 @@ def show_report():
     except:
         return "", 404
 
+@app.route("/viewledger/wallets")
+def show_report():
+    try:
+        return jsonify(knownWallets), 200
+    except:
+        return "", 404
+
+@app.route("/viewledger/blockchain")
+def show_report():
+    try:
+        return jsonify(block_ledger), 200
+    except:
+        return "", 404
 
 if __name__ == "__main__":
     HOST = "0.0.0.0"  # Use '0.0.0.0' to make the server accessible externally
     PORT = 4020  # Set your desired port number
     app.run(host=HOST, port=PORT, debug=True)
+
+while True:
+    # check every 10 seconds the vote status for pending requests
+    time.sleep(10)
+
+    for i in pending_requests.keys():
+        status = check_consensus(i)
+        if status == "confirmed":
+            transaction_ledger[i] = transaction_ledger.get(i) #add to ledger
+            #increment wallets value
+            pending_requests.pop(i) #accepted to remove
+        elif status == "denied":
+            pending_requests.pop(i) #denied so remove
