@@ -179,26 +179,55 @@ def request_vote():
         return "", 404 #something bad happened
 
 
-@app.route("/viewledger")
-def show_ledger():
+@app.route("/viewledger", methods=["GET"])
+def view_ledger():
     try:
-        return jsonify(transaction_ledger), 200
-    except:
-        return "", 404
+        return jsonify({
+            "status": "ok",
+            "count": len(transaction_ledger),
+            "transactions": transaction_ledger
+        }), 200
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
-@app.route("/viewledger/wallets")
-def show_wallets():
+@app.route("/viewledger/wallets", methods=["GET"])
+def view_wallets():
     try:
-        return jsonify(knownWallets), 200
-    except:
-        return "", 404
+        return jsonify({
+            "status": "ok",
+            "wallets": knownWallets
+        }), 200
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
-@app.route("/viewledger/blockchain")
-def show_blockchain():
+@app.route("/viewledger/blockchain", methods=["GET"])
+def view_blockchain():
     try:
-        return jsonify(block_ledger), 200
-    except:
-        return "", 404
+        blocks = []
+
+        for i, block in enumerate(block_ledger):
+            blocks.append({
+                "index": i,
+                "hash": block
+            })
+
+        return jsonify({
+            "status": "ok",
+            "blockCount": len(block_ledger),
+            "blocks": blocks
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
 def consensus_loop():
     while True:
