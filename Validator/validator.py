@@ -6,8 +6,8 @@ app = Flask(__name__)
 
 # Storage for wallet/sensor public keys
 knownWallets = {
-    "walletA": "[KEY HERE]",
-    "walletB": "[KEY HERE]"
+    "[walletA KEY HERE]": 0, #balance
+    "[walletB KEY HERE]": 0, #balance
 }
 
 # Storage for validator IP addresses
@@ -26,9 +26,24 @@ exampledata = {
     "signature": "[DIGITAL SIGNATURE USING PRIVATE KEY]"
 }
 
+exampleTransaction = {
+    "walletKey": "[PUBLIC KEY]",
+    "timeStamp": 0,
+    "kwh": 75,
+    "priceperkwh": 0.2,
+    "signature": "[DIGITAL SIGNATURE USING PRIVATE KEY]"
+}
+
 # Voting and Consensus Stuff
 pending_requests = {}
 
+#once approved, push new transactions to entire ledger
+transaction_ledger = {}
+
+#every three transactions get hashed into a block and added here
+block_ledger = {}
+#how many transactions to bundle into a block
+blockSize = 3
 
 # Used while we are tallying votes
 def check_consensus(hash):
@@ -135,9 +150,9 @@ def request_vote():
 
     try:
         if pending_requests[hash][validatorAddresses["self"]] == "APPROVE":
-            return "", 205
+            return "", 205 #205 means I APPROVE
         else:
-            return "", 206
+            return "", 206 #206 means I DENY
 
     except:
         return "", 404
@@ -146,7 +161,7 @@ def request_vote():
 @app.route("/viewledger")
 def show_report():
     try:
-        return jsonify({"messages": comments}), 200
+        return jsonify(transaction_ledger), 200
     except:
         return "", 404
 
