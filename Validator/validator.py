@@ -3,6 +3,7 @@ import time
 from flask import Flask, request, jsonify
 import hashlib
 import requests
+import rsa
 
 app = Flask(__name__)
 
@@ -40,10 +41,10 @@ exampleTransaction = {
 pending_requests = {}
 
 #Once approved, push new transactions to entire ledger
-transaction_ledger = {}
+transaction_ledger = []
 
 #every three transactions get hashed into a block and added here
-block_ledger = {}
+block_ledger = []
 #how many transactions to bundle into a block
 blockSize = 3
 
@@ -77,6 +78,8 @@ def validate_data(data):
     if priceperkwh <= 0:
         return False
 
+def verify_signature(signature):
+
 
 @app.route("/")
 def home():
@@ -99,12 +102,12 @@ def post_data():
 
     # Store the message in the pending_push array and validate
     try:
-        pending_requests[hashlib.sha256(data.encode("utf-8"))] = {}
+        pending_requests[hashlib.sha256(data.encode("utf-8")).hexdigest()] = {}
 
         if validate_data(data):
-            pending_requests[hashlib.sha256(data.encode("utf-8"))].votes[validatorAddresses["self"]] = "APPROVE"
+            pending_requests[hashlib.sha256(data.encode("utf-8")).hexdigest()].votes[validatorAddresses["self"]] = "APPROVE"
         else:
-            pending_requests[hashlib.sha256(data.encode("utf-8"))].votes[validatorAddresses["self"]] = "BLOCKED"
+            pending_requests[hashlib.sha256(data.encode("utf-8")).hexdigest()].votes[validatorAddresses["self"]] = "BLOCKED"
 
         # since this endpoint is used to deceminate the data, we need to broadcast to all other validators
         for i, j in validatorAddresses:
@@ -132,12 +135,12 @@ def propagatedata():
 
     # Store the message in the pending_push array and validate
     try:
-        pending_requests[hashlib.sha256(data.encode("utf-8"))] = {}
+        pending_requests[hashlib.sha256(data.encode("utf-8")).hexdigest()] = {}
 
         if validate_data(data):
-            pending_requests[hashlib.sha256(data.encode("utf-8"))][validatorAddresses["self"]] = "APPROVE"
+            pending_requests[hashlib.sha256(data.encode("utf-8"))].hexdigest()[validatorAddresses["self"]] = "APPROVE"
         else:
-            pending_requests[hashlib.sha256(data.encode("utf-8"))][validatorAddresses["self"]] = "BLOCKED"
+            pending_requests[hashlib.sha256(data.encode("utf-8"))].hexdigest()[validatorAddresses["self"]] = "BLOCKED"
 
         return "", 200
     except:
@@ -195,8 +198,13 @@ while True:
     for i in pending_requests.keys():
         status = check_consensus(i)
         if status == "confirmed":
-            transaction_ledger[i] = transaction_ledger.get(i) #add to ledger
-            #increment wallets value
+            transaction_ledger[i] = pending_requests[i] #add pending request to the ledger
+            knownWallets[pending_requests[i].data.walletKey] += 1 #give a coin!
             pending_requests.pop(i) #accepted to remove
         elif status == "denied":
             pending_requests.pop(i) #denied so remove
+
+    # add new transactions to blockchain
+    if (len(transaction_ledger)%blockSize == 0) and (len(transaction_ledger)/blockSize > (len(block_ledger))):
+        # add every three new transactions to our blockchain
+        block_ledger = hashlib.sha256("|".join(block_ledger).encode('utf-8')).hexdigest()
