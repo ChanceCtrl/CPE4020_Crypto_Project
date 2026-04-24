@@ -32,8 +32,8 @@ knownWallets = _load_known_wallets(["walletA", "walletB"])
 # "self" must be an address reachable by peers (e.g. "192.168.1.10:4020")
 # so that peers know where to send vote callbacks.
 validatorAddresses = {
-    "self":       "[MY IP HERE]:4020",
-    "validatorA": "[VALIDATOR A IP HERE]:4020",
+    "self":       "10.0.0.45:4020",
+    "validatorA": "10.0.0.231:4020",
 }
 
 pending_requests = {}
@@ -56,11 +56,16 @@ def verify_signature(public_key_pem: str, message: dict, signature_hex: str) -> 
         message_bytes = json.dumps(payload, sort_keys=True).encode()
         signature_bytes = bytes.fromhex(signature_hex)
         pub_key = load_public_key(public_key_pem)
-        rsa.verify(message_bytes, signature_bytes, pub_key)
-        return True
-    except Exception:
-        return False
 
+        print(f"[verify] payload canonical: {json.dumps(payload, sort_keys=True)}")
+        print(f"[verify] signature hex (first 20): {signature_hex[:20]}")
+
+        rsa.verify(message_bytes, signature_bytes, pub_key)
+        print(f"[verify] PASS")
+        return True
+    except Exception as e:
+        print(f"[verify] FAIL: {e}")
+        return False
 
 # ---------------------------------------------------------------------------
 # Validation
@@ -72,13 +77,21 @@ def validate_data(data: dict) -> bool:
     price      = data.get("priceperkwh")
     signature  = data.get("signature")
 
+    print(f"[validate] incoming keys: {list(data.keys())}")
+    print(f"[validate] wallet known: {wallet_key in knownWallets}")
+    print(f"[validate] kwh={kwh}, price={price}")
+
     if wallet_key not in knownWallets:
+        print("[validate] BLOCKED: unknown wallet")
         return False
     if not (0 < kwh < 200):
+        print("[validate] BLOCKED: kwh out of range")
         return False
     if price <= 0:
+        print("[validate] BLOCKED: bad price")
         return False
     if not verify_signature(wallet_key, data, signature):
+        print("[validate] BLOCKED: bad signature")
         return False
     return True
 
