@@ -56,7 +56,7 @@ def check_consensus(hash):
 
     approve = list(vote_list.values()).count("APPROVE")
     deny = list(vote_list.values()).count("BLOCKED")
-    total = len(vote_list)
+    total = len(validatorAddresses.keys())
 
     if approve > total / 2:
         return "confirmed"
@@ -255,4 +255,3 @@ if __name__ == "__main__":
     PORT = 4020  # Set your desired port number
     threading.Thread(target=consensus_loop, daemon=True).start()
     app.run(host=HOST, port=PORT, debug=True)
-
