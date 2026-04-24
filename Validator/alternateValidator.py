@@ -6,8 +6,10 @@ import threading
 import requests
 import rsa
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 
 app = Flask(__name__)
+CORS(app)  # allow dashboard HTML (different origin) to fetch from this server
 
 # ---------------------------------------------------------------------------
 # Shared state + lock
@@ -29,8 +31,6 @@ def _load_known_wallets(names):
 
 knownWallets = _load_known_wallets(["walletA", "walletB"])
 
-# "self" must be an address reachable by peers (e.g. "192.168.1.10:4020")
-# so that peers know where to send vote callbacks.
 validatorAddresses = {
     "self":       "[MY IP HERE]:4020",
     "validatorA": "[VALIDATOR A IP HERE]:4020",
@@ -39,6 +39,11 @@ validatorAddresses = {
 pending_requests = {}
 transaction_ledger = []
 block_ledger = []
+
+# Hashes we have already confirmed or denied — used to suppress stale
+# /checkvote queries from peers that haven't caught up yet.
+settled_hashes = set()
+
 BLOCK_SIZE = 3
 
 
@@ -120,6 +125,37 @@ def _propagate(data: dict):
             print(f"Could not reach {name}: {e}")
 
 
+def _collect_peer_votes(tx_hash: str):
+    """
+    Ask every peer how they voted on tx_hash. Called outside state_lock
+    since it does network I/O. Silently skips 404s — the peer either
+    hasn't received the tx yet or has already settled it.
+    """
+    for name, address in validatorAddresses.items():
+        if name == "self":
+            continue
+        try:
+            response = requests.post(
+                f"http://{address}/checkvote",
+                json={"hash": tx_hash},
+                timeout=5,
+            )
+            if response.status_code == 205:
+                vote = "APPROVE"
+            elif response.status_code == 206:
+                vote = "BLOCKED"
+            else:
+                # 404 means the peer has already settled or never saw it — stop asking
+                return
+
+            with state_lock:
+                if tx_hash in pending_requests:
+                    pending_requests[tx_hash]["votes"][address] = vote
+
+        except requests.exceptions.RequestException as e:
+            print(f"Could not reach {name} for checkvote: {e}")
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -131,11 +167,6 @@ def home():
 
 @app.route("/publishdata", methods=["POST"])
 def post_data():
-    """
-    Entry point for sensor data. Records our vote immediately and returns 200
-    to the client. Propagation (with vote-callback address attached) happens
-    in a background thread so peer timeouts never block the client.
-    """
     if not request.is_json:
         return "", 400
 
@@ -146,7 +177,7 @@ def post_data():
         my_vote = "APPROVE" if validate_data(data) else "BLOCKED"
 
         with state_lock:
-            if tx_hash in pending_requests:
+            if tx_hash in pending_requests or tx_hash in settled_hashes:
                 return "", 200
             pending_requests[tx_hash] = {"data": data, "votes": {}}
             pending_requests[tx_hash]["votes"][validatorAddresses["self"]] = my_vote
@@ -161,7 +192,6 @@ def post_data():
 
 @app.route("/propagatedata", methods=["POST"])
 def propagate_data():
-    """Called by a peer. Validates and records this node's vote."""
     if not request.is_json:
         return "", 400
 
@@ -172,8 +202,8 @@ def propagate_data():
         my_vote = "APPROVE" if validate_data(data) else "BLOCKED"
 
         with state_lock:
-            if tx_hash in pending_requests:
-                return "", 200  # already have it
+            if tx_hash in pending_requests or tx_hash in settled_hashes:
+                return "", 200
             pending_requests[tx_hash] = {"data": data, "votes": {}}
             pending_requests[tx_hash]["votes"][validatorAddresses["self"]] = my_vote
 
@@ -184,10 +214,13 @@ def propagate_data():
         return "", 400
 
 
-
 @app.route("/checkvote", methods=["POST"])
 def check_vote():
-    """Returns 205 = APPROVE, 206 = BLOCKED, 404 = unknown."""
+    """
+    Returns 205 = APPROVE, 206 = BLOCKED.
+    Returns 404 only if this hash is completely unknown (never seen it).
+    Returns 200 if already settled — tells the peer to stop asking.
+    """
     if not request.is_json:
         return "", 400
 
@@ -195,6 +228,8 @@ def check_vote():
     tx_hash = data.get("hash")
 
     with state_lock:
+        if tx_hash in settled_hashes:
+            return "", 200  # already settled — peer can stop querying
         try:
             my_vote = pending_requests[tx_hash]["votes"][validatorAddresses["self"]]
             return ("", 205) if my_vote == "APPROVE" else ("", 206)
@@ -204,23 +239,17 @@ def check_vote():
 
 @app.route("/debug", methods=["GET"])
 def debug():
-    """
-    Returns a full snapshot of this node's state — useful for diagnosing
-    why two validators are disagreeing.  Hit this on both nodes and compare.
-    """
     with state_lock:
-        pending_summary = {}
-        for h, entry in pending_requests.items():
-            pending_summary[h[:12]] = {
+        pending_summary = {
+            h[:12]: {
                 "votes": entry["votes"],
                 "walletKey_prefix": entry["data"].get("walletKey", "")[:40],
                 "kwh": entry["data"].get("kwh"),
                 "priceperkwh": entry["data"].get("priceperkwh"),
             }
-
-        wallet_fingerprints = {
-            k[:40] + "...": v for k, v in knownWallets.items()
+            for h, entry in pending_requests.items()
         }
+        wallet_fingerprints = {k[:40] + "...": v for k, v in knownWallets.items()}
 
     return jsonify({
         "self": validatorAddresses["self"],
@@ -229,15 +258,12 @@ def debug():
         "pending": pending_summary,
         "confirmed_count": len(transaction_ledger),
         "block_count": len(block_ledger),
+        "settled_count": len(settled_hashes),
     }), 200
 
 
 @app.route("/debug/validate", methods=["POST"])
 def debug_validate():
-    """
-    Pass in a transaction payload and see exactly why this node
-    approves or blocks it.  Breaks down each validation check individually.
-    """
     if not request.is_json:
         return "", 400
 
@@ -248,14 +274,13 @@ def debug_validate():
     signature  = data.get("signature", "")
 
     checks = {
-        "wallet_known":       wallet_key in knownWallets,
-        "kwh_in_range":       isinstance(kwh, (int, float)) and 0 < kwh < 200,
-        "price_positive":     isinstance(price, (int, float)) and price > 0,
-        "signature_valid":    verify_signature(wallet_key, data, signature),
-        "wallet_key_prefix":  wallet_key[:40] if wallet_key else "(missing)",
+        "wallet_known":    wallet_key.replace("\r\n", "\n").strip() in knownWallets,
+        "kwh_in_range":    isinstance(kwh, (int, float)) and 0 < kwh < 200,
+        "price_positive":  isinstance(price, (int, float)) and price > 0,
+        "signature_valid": verify_signature(wallet_key, data, signature),
+        "wallet_key_prefix": wallet_key[:40] if wallet_key else "(missing)",
     }
     checks["overall"] = all(v for k, v in checks.items() if k != "wallet_key_prefix")
-
     return jsonify(checks), 200
 
 
@@ -301,62 +326,33 @@ def view_blockchain():
 # Background consensus loop
 # ---------------------------------------------------------------------------
 
-def _collect_peer_votes(tx_hash: str):
-    """
-    Ask every peer validator how they voted on tx_hash via /checkvote and
-    record the responses into pending_requests.  Called outside state_lock
-    since it does network I/O.
-    """
-    for name, address in validatorAddresses.items():
-        if name == "self":
-            continue
-        try:
-            response = requests.post(
-                f"http://{address}/checkvote",
-                json={"hash": tx_hash},
-                timeout=5,
-            )
-            if response.status_code == 205:
-                vote = "APPROVE"
-            elif response.status_code == 206:
-                vote = "BLOCKED"
-            else:
-                continue  # peer doesn't know about this tx yet
-
-            with state_lock:
-                if tx_hash in pending_requests:
-                    pending_requests[tx_hash]["votes"][address] = vote
-
-        except requests.exceptions.RequestException as e:
-            print(f"Could not reach {name} for checkvote: {e}")
-
-
 def consensus_loop():
     while True:
         time.sleep(10)
 
-        # Collect peer votes outside the lock (network I/O)
+        # Snapshot pending hashes outside the lock before doing network I/O
         with state_lock:
             hashes = list(pending_requests.keys())
 
         for tx_hash in hashes:
             _collect_peer_votes(tx_hash)
 
-        # Now tally and commit
         with state_lock:
             for tx_hash in list(pending_requests.keys()):
                 status = check_consensus(tx_hash)
 
                 if status == "confirmed":
                     entry = pending_requests.pop(tx_hash)
+                    settled_hashes.add(tx_hash)
                     transaction_ledger.append(entry)
-                    wallet_key = entry["data"].get("walletKey")
+                    wallet_key = entry["data"].get("walletKey", "").replace("\r\n", "\n").strip()
                     if wallet_key in knownWallets:
                         knownWallets[wallet_key] += 1
                     print(f"Confirmed: {tx_hash[:12]}...")
 
                 elif status == "denied":
                     pending_requests.pop(tx_hash)
+                    settled_hashes.add(tx_hash)
                     print(f"Denied:    {tx_hash[:12]}...")
 
             committed   = len(block_ledger) * BLOCK_SIZE

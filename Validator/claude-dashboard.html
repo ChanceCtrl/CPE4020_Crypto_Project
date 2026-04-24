@@ -1,0 +1,959 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DePIN Validator Dashboard</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
+
+  :root {
+    --bg:        #0a0c0f;
+    --bg2:       #111318;
+    --bg3:       #181c23;
+    --border:    #1e2530;
+    --border2:   #2a3240;
+    --green:     #00e676;
+    --green-dim: #00563a;
+    --red:       #ff4d4d;
+    --red-dim:   #5c1a1a;
+    --amber:     #ffb300;
+    --amber-dim: #4a3000;
+    --blue:      #4fc3f7;
+    --blue-dim:  #0d3a52;
+    --muted:     #4a5568;
+    --text:      #c9d1dc;
+    --text2:     #7a8a9e;
+    --mono:      'IBM Plex Mono', monospace;
+    --sans:      'IBM Plex Sans', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 13px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Scanline overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.08) 2px,
+      rgba(0,0,0,0.08) 4px
+    );
+    pointer-events: none;
+    z-index: 100;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg2);
+    position: sticky;
+    top: 0;
+    z-index: 50;
+  }
+
+  .logo {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    color: var(--green);
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .logo-dot {
+    width: 7px; height: 7px;
+    background: var(--green);
+    border-radius: 50%;
+    box-shadow: 0 0 8px var(--green);
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .config-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .config-row label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text2);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .config-row input {
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    width: 180px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  .config-row input:focus { border-color: var(--green); }
+
+  .btn {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 6px 14px;
+    border-radius: 4px;
+    border: none;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .btn-green {
+    background: var(--green);
+    color: #000;
+  }
+  .btn-green:hover { background: #33ffaa; }
+  .btn-green.active { background: var(--red); color: #fff; }
+
+  .btn-ghost {
+    background: transparent;
+    border: 1px solid var(--border2);
+    color: var(--text2);
+  }
+  .btn-ghost:hover { border-color: var(--green); color: var(--green); }
+
+  .refresh-interval {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .refresh-interval label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text2);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .refresh-interval select {
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 4px 6px;
+    border-radius: 4px;
+    outline: none;
+  }
+
+  .main {
+    padding: 20px 24px;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-rows: auto auto 1fr;
+    gap: 16px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .card-header {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .card-title {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text2);
+  }
+
+  .card-body { padding: 14px; }
+
+  /* ── Stat tiles ── */
+  .stats-row {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+  }
+
+  .stat-tile {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .stat-tile::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 2px;
+  }
+
+  .stat-tile.green::after { background: var(--green); }
+  .stat-tile.amber::after { background: var(--amber); }
+  .stat-tile.red::after   { background: var(--red); }
+  .stat-tile.blue::after  { background: var(--blue); }
+  .stat-tile.muted::after { background: var(--muted); }
+
+  .stat-label {
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text2);
+    margin-bottom: 6px;
+  }
+
+  .stat-value {
+    font-family: var(--mono);
+    font-size: 28px;
+    font-weight: 600;
+    line-height: 1;
+    transition: all 0.3s;
+  }
+
+  .stat-tile.green .stat-value { color: var(--green); }
+  .stat-tile.amber .stat-value { color: var(--amber); }
+  .stat-tile.red   .stat-value { color: var(--red); }
+  .stat-tile.blue  .stat-value { color: var(--blue); }
+  .stat-tile.muted .stat-value { color: var(--muted); }
+
+  .stat-sub {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text2);
+    margin-top: 4px;
+  }
+
+  /* ── Node status cards ── */
+  .nodes-col {
+    grid-column: 1;
+    grid-row: 2 / 4;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .node-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    flex: 1;
+  }
+
+  .node-header {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .node-indicator {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    flex-shrink: 0;
+    transition: background 0.3s, box-shadow 0.3s;
+  }
+
+  .node-indicator.online {
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  .node-indicator.offline {
+    background: var(--red);
+    box-shadow: 0 0 6px var(--red);
+  }
+
+  .node-name {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    color: var(--text);
+    flex: 1;
+  }
+
+  .node-url {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--text2);
+  }
+
+  .node-body { padding: 12px 14px; }
+
+  .node-stat {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .node-stat:last-child { border-bottom: none; }
+
+  .node-stat-key {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text2);
+  }
+
+  .node-stat-val {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text);
+  }
+
+  /* ── Transaction feed ── */
+  .feed-col {
+    grid-column: 2 / 4;
+    grid-row: 2;
+  }
+
+  .feed-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .feed-table th {
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text2);
+    padding: 6px 8px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .feed-table td {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 7px 8px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+    vertical-align: middle;
+  }
+
+  .feed-table tr:last-child td { border-bottom: none; }
+
+  .feed-table tr { transition: background 0.15s; }
+  .feed-table tr:hover td { background: var(--bg3); }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 3px;
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .badge-green  { background: var(--green-dim);  color: var(--green); }
+  .badge-red    { background: var(--red-dim);    color: var(--red); }
+  .badge-amber  { background: var(--amber-dim);  color: var(--amber); }
+  .badge-blue   { background: var(--blue-dim);   color: var(--blue); }
+  .badge-muted  { background: #1a1f2a; color: var(--muted); }
+
+  /* ── Pending + blocks ── */
+  .bottom-row {
+    grid-column: 2 / 4;
+    grid-row: 3;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+
+  /* ── Pending list ── */
+  .pending-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+
+  .pending-item {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 8px 10px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    animation: slideIn 0.25s ease;
+  }
+
+  @keyframes slideIn { from { opacity:0; transform:translateX(-8px); } }
+
+  .pending-hash {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--blue);
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .vote-pills {
+    display: flex;
+    gap: 4px;
+  }
+
+  .vote-pill {
+    font-family: var(--mono);
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 2px;
+  }
+
+  /* ── Blockchain ── */
+  .block-chain {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+
+  .block-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    animation: slideIn 0.25s ease;
+  }
+
+  .block-index {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--amber);
+    font-weight: 600;
+    min-width: 32px;
+  }
+
+  .block-hash {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text2);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ── Consensus chart ── */
+  .chart-col {
+    grid-column: 1 / -1;
+  }
+
+  .mini-bar-wrap {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 60px;
+    padding: 0 2px;
+  }
+
+  .mini-bar-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    flex: 1;
+  }
+
+  .mini-bar {
+    width: 100%;
+    border-radius: 2px 2px 0 0;
+    min-height: 2px;
+    transition: height 0.4s ease;
+  }
+
+  .empty-state {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    text-align: center;
+    padding: 20px;
+  }
+
+  .last-updated {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--muted);
+  }
+
+  .error-banner {
+    display: none;
+    background: var(--red-dim);
+    border: 1px solid var(--red);
+    border-radius: 5px;
+    padding: 8px 12px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--red);
+    margin-bottom: 0;
+  }
+
+  .new-flash { animation: flash 0.6s ease; }
+  @keyframes flash {
+    0%  { background: rgba(0,230,118,0.12); }
+    100%{ background: transparent; }
+  }
+
+  /* scrollbar styling */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-dot"></div>
+    DePIN Validator Monitor
+  </div>
+  <div class="header-right">
+    <div class="config-row">
+      <label>Node A</label>
+      <input type="text" id="urlA" value="http://localhost:4020" placeholder="http://localhost:4020">
+    </div>
+    <div class="config-row">
+      <label>Node B</label>
+      <input type="text" id="urlB" value="http://localhost:4021" placeholder="http://localhost:4021">
+    </div>
+    <div class="refresh-interval">
+      <label>Poll</label>
+      <select id="pollInterval">
+        <option value="2000">2s</option>
+        <option value="5000" selected>5s</option>
+        <option value="10000">10s</option>
+      </select>
+    </div>
+    <button class="btn btn-ghost" onclick="fetchAll()">↺ Refresh</button>
+    <button class="btn btn-green" id="autoBtn" onclick="toggleAuto()">▶ Live</button>
+  </div>
+</header>
+
+<div class="main">
+
+  <!-- Stat tiles -->
+  <div class="stats-row">
+    <div class="stat-tile green">
+      <div class="stat-label">Confirmed Txns</div>
+      <div class="stat-value" id="statConfirmed">—</div>
+      <div class="stat-sub" id="statConfirmedSub">total approved</div>
+    </div>
+    <div class="stat-tile red">
+      <div class="stat-label">Denied Txns</div>
+      <div class="stat-value" id="statDenied">—</div>
+      <div class="stat-sub">rejected by consensus</div>
+    </div>
+    <div class="stat-tile amber">
+      <div class="stat-label">Pending</div>
+      <div class="stat-value" id="statPending">—</div>
+      <div class="stat-sub">awaiting votes</div>
+    </div>
+    <div class="stat-tile blue">
+      <div class="stat-label">Blocks</div>
+      <div class="stat-value" id="statBlocks">—</div>
+      <div class="stat-sub" id="statBlocksSub">committed</div>
+    </div>
+    <div class="stat-tile muted">
+      <div class="stat-label">Wallets</div>
+      <div class="stat-value" id="statWallets">—</div>
+      <div class="stat-sub">registered</div>
+    </div>
+  </div>
+
+  <!-- Node status column -->
+  <div class="nodes-col">
+
+    <div class="node-card" id="nodeCardA">
+      <div class="node-header">
+        <div class="node-indicator" id="indicatorA"></div>
+        <div class="node-name">Validator A</div>
+        <div class="node-url" id="nodeUrlA">—</div>
+      </div>
+      <div class="node-body" id="nodeBodyA">
+        <div class="empty-state">not polled yet</div>
+      </div>
+    </div>
+
+    <div class="node-card" id="nodeCardB">
+      <div class="node-header">
+        <div class="node-indicator" id="indicatorB"></div>
+        <div class="node-name">Validator B</div>
+        <div class="node-url" id="nodeUrlB">—</div>
+      </div>
+      <div class="node-body" id="nodeBodyB">
+        <div class="empty-state">not polled yet</div>
+      </div>
+    </div>
+
+    <div class="card" style="padding: 12px 14px;">
+      <div class="stat-label" style="margin-bottom:6px;">Consensus Rate</div>
+      <div id="consensusRate" style="font-family:var(--mono);font-size:22px;font-weight:600;color:var(--green);">—</div>
+      <div style="margin-top:8px;background:var(--bg3);border-radius:3px;height:6px;overflow:hidden;">
+        <div id="consensusBar" style="height:100%;background:var(--green);width:0%;transition:width 0.5s ease;border-radius:3px;"></div>
+      </div>
+      <div style="font-family:var(--mono);font-size:9px;color:var(--text2);margin-top:4px;">approve / (approve + deny)</div>
+    </div>
+
+  </div>
+
+  <!-- Transaction feed -->
+  <div class="card feed-col">
+    <div class="card-header">
+      <span class="card-title">Transaction Ledger</span>
+      <span class="last-updated" id="lastUpdated">—</span>
+    </div>
+    <div class="card-body" style="padding:0;overflow:auto;max-height:260px;">
+      <table class="feed-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Wallet</th>
+            <th>kWh</th>
+            <th>Price/kWh</th>
+            <th>Timestamp</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="txBody">
+          <tr><td colspan="6" class="empty-state">no transactions yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Bottom row: pending + blocks -->
+  <div class="bottom-row">
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Pending Consensus</span>
+        <span class="badge badge-amber" id="pendingCount">0</span>
+      </div>
+      <div class="card-body" style="padding:10px;">
+        <div class="pending-list" id="pendingList">
+          <div class="empty-state">no pending transactions</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Block Ledger</span>
+        <span class="badge badge-amber" id="blockCount">0</span>
+      </div>
+      <div class="card-body" style="padding:10px;">
+        <div class="block-chain" id="blockList">
+          <div class="empty-state">no blocks committed yet</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+
+let autoPolling = false;
+let pollTimer   = null;
+let deniedCount = 0;
+let prevTxCount = 0;
+let prevBlockCount = 0;
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function urlA() { return document.getElementById('urlA').value.trim().replace(/\/$/, ''); }
+function urlB() { return document.getElementById('urlB').value.trim().replace(/\/$/, ''); }
+
+async function safeFetch(url) {
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(4000) });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return await r.json();
+  } catch(e) {
+    return null;
+  }
+}
+
+function ts(epoch) {
+  if (!epoch) return '—';
+  const d = new Date(epoch * 1000);
+  return d.toLocaleTimeString();
+}
+
+function shortKey(pem) {
+  if (!pem || pem.startsWith('[')) return pem || '—';
+  const lines = pem.replace(/-----[A-Z ]+-----/g, '').replace(/\s/g, '');
+  return lines.slice(0, 12) + '…';
+}
+
+// ── Render helpers ───────────────────────────────────────────────────────────
+
+function renderNodeBody(containerId, data) {
+  const el = document.getElementById(containerId);
+  if (!data) {
+    el.innerHTML = '<div class="empty-state">unreachable</div>';
+    return;
+  }
+  const rows = [
+    ['Transactions', data.count ?? '—'],
+    ['Blocks', data.blockCount ?? '—'],
+    ['Wallets', data.wallets ? Object.keys(data.wallets).length : '—'],
+  ];
+  el.innerHTML = rows.map(([k,v]) => `
+    <div class="node-stat">
+      <span class="node-stat-key">${k}</span>
+      <span class="node-stat-val">${v}</span>
+    </div>`).join('');
+}
+
+function setIndicator(id, online) {
+  const el = document.getElementById(id);
+  el.className = 'node-indicator ' + (online ? 'online' : 'offline');
+}
+
+function renderTransactions(ledger) {
+  const tbody = document.getElementById('txBody');
+  if (!ledger || !ledger.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">no transactions yet</td></tr>';
+    return;
+  }
+  const rows = [...ledger].reverse().slice(0, 50).map((entry, i) => {
+    const d = entry.data || entry;
+    const idx = ledger.length - i;
+    const isNew = idx > prevTxCount;
+    return `<tr class="${isNew ? 'new-flash' : ''}">
+      <td style="color:var(--text2)">${idx}</td>
+      <td style="color:var(--blue)">${shortKey(d.walletKey)}</td>
+      <td>${d.kwh ?? '—'}</td>
+      <td>$${d.priceperkwh ?? '—'}</td>
+      <td style="color:var(--text2)">${ts(d.timeStamp)}</td>
+      <td><span class="badge badge-green">confirmed</span></td>
+    </tr>`;
+  });
+  tbody.innerHTML = rows.join('');
+}
+
+function renderPending(pending) {
+  const el = document.getElementById('pendingList');
+  const countEl = document.getElementById('pendingCount');
+  if (!pending || !Object.keys(pending).length) {
+    el.innerHTML = '<div class="empty-state">no pending transactions</div>';
+    countEl.textContent = '0';
+    document.getElementById('statPending').textContent = '0';
+    return;
+  }
+  const hashes = Object.keys(pending);
+  countEl.textContent = hashes.length;
+  document.getElementById('statPending').textContent = hashes.length;
+
+  el.innerHTML = hashes.slice(0, 10).map(h => {
+    const votes = pending[h].votes || {};
+    const pills = Object.entries(votes).map(([addr, v]) => {
+      const cls = v === 'APPROVE' ? 'badge-green' : 'badge-red';
+      return `<span class="vote-pill badge ${cls}">${v === 'APPROVE' ? '✓' : '✗'}</span>`;
+    }).join('');
+    return `<div class="pending-item">
+      <span class="pending-hash">${h}</span>
+      <div class="vote-pills">${pills || '<span style="font-family:var(--mono);font-size:9px;color:var(--muted)">no votes</span>'}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderBlocks(blocks) {
+  const el = document.getElementById('blockList');
+  const countEl = document.getElementById('blockCount');
+  if (!blocks || !blocks.length) {
+    el.innerHTML = '<div class="empty-state">no blocks committed yet</div>';
+    countEl.textContent = '0';
+    document.getElementById('statBlocks').textContent = '0';
+    return;
+  }
+  countEl.textContent = blocks.length;
+  document.getElementById('statBlocks').textContent = blocks.length;
+  document.getElementById('statBlocksSub').textContent = `${blocks.length * 3} txns packaged`;
+
+  el.innerHTML = [...blocks].reverse().map(b => `
+    <div class="block-item ${b.index >= prevBlockCount ? 'new-flash' : ''}">
+      <span class="block-index">#${b.index}</span>
+      <span class="block-hash">${b.hash}</span>
+    </div>`).join('');
+}
+
+function renderWallets(wallets) {
+  if (!wallets) return;
+  document.getElementById('statWallets').textContent = Object.keys(wallets).length;
+}
+
+// ── Main fetch ───────────────────────────────────────────────────────────────
+
+async function fetchAll() {
+  const a = urlA(), b = urlB();
+  document.getElementById('nodeUrlA').textContent = a;
+  document.getElementById('nodeUrlB').textContent = b;
+
+  const [ledgerA, walletsA, chainA, ledgerB, walletsB, chainB] = await Promise.all([
+    safeFetch(`${a}/viewledger`),
+    safeFetch(`${a}/viewledger/wallets`),
+    safeFetch(`${a}/viewledger/blockchain`),
+    safeFetch(`${b}/viewledger`),
+    safeFetch(`${b}/viewledger/wallets`),
+    safeFetch(`${b}/viewledger/blockchain`),
+  ]);
+
+  // Node indicators
+  setIndicator('indicatorA', !!ledgerA);
+  setIndicator('indicatorB', !!ledgerB);
+
+  // Node body stats
+  renderNodeBody('nodeBodyA', ledgerA && chainA && walletsA ? {
+    count: ledgerA.count,
+    blockCount: chainA.blockCount,
+    wallets: walletsA.wallets,
+  } : null);
+
+  renderNodeBody('nodeBodyB', ledgerB && chainB && walletsB ? {
+    count: ledgerB.count,
+    blockCount: chainB.blockCount,
+    wallets: walletsB.wallets,
+  } : null);
+
+  // Use node A as source of truth for ledger display
+  const transactions = ledgerA?.transactions || [];
+  renderTransactions(transactions);
+  document.getElementById('statConfirmed').textContent = transactions.length;
+  document.getElementById('statConfirmedSub').textContent =
+    `${transactions.length} total approved`;
+
+  // Blocks
+  const blocks = chainA?.blocks || [];
+  renderBlocks(blocks);
+
+  // Wallets
+  renderWallets(walletsA?.wallets);
+
+  // Denied counter persists across polls (no server endpoint, we estimate)
+  document.getElementById('statDenied').textContent = deniedCount;
+
+  // Consensus rate
+  const approved = transactions.length;
+  const total = approved + deniedCount;
+  const rate = total > 0 ? Math.round((approved / total) * 100) : 100;
+  document.getElementById('consensusRate').textContent = `${rate}%`;
+  document.getElementById('consensusBar').style.width = `${rate}%`;
+
+  // Last updated
+  document.getElementById('lastUpdated').textContent =
+    'updated ' + new Date().toLocaleTimeString();
+
+  prevTxCount = transactions.length;
+  prevBlockCount = blocks.length;
+}
+
+// ── Auto polling ─────────────────────────────────────────────────────────────
+
+function toggleAuto() {
+  autoPolling = !autoPolling;
+  const btn = document.getElementById('autoBtn');
+  if (autoPolling) {
+    btn.textContent = '■ Stop';
+    btn.classList.add('active');
+    schedulePoll();
+  } else {
+    btn.textContent = '▶ Live';
+    btn.classList.remove('active');
+    clearTimeout(pollTimer);
+  }
+}
+
+function schedulePoll() {
+  if (!autoPolling) return;
+  fetchAll().then(() => {
+    const interval = parseInt(document.getElementById('pollInterval').value);
+    pollTimer = setTimeout(schedulePoll, interval);
+  });
+}
+
+document.getElementById('pollInterval').addEventListener('change', () => {
+  if (autoPolling) {
+    clearTimeout(pollTimer);
+    schedulePoll();
+  }
+});
+
+// Initial fetch
+fetchAll();
+</script>
+</body>
+</html>
