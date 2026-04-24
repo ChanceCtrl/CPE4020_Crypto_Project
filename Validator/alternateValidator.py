@@ -32,8 +32,8 @@ def _load_known_wallets(names):
 knownWallets = _load_known_wallets(["walletA", "walletB"])
 
 validatorAddresses = {
-    "self":       "[MY IP HERE]:4020",
-    "validatorA": "[VALIDATOR A IP HERE]:4020",
+    "self":       "10.0.0.45:4020",
+    "validatorA": "10.0.0.231:4020",
 }
 
 pending_requests = {}

@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DePIN Energy Grid — Live Network View</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:     #070a0e;
+    --bg2:    #0d1117;
+    --bg3:    #131920;
+    --border: rgba(255,255,255,0.07);
+    --bord2:  rgba(255,255,255,0.13);
+    --green:  #00ff88;
+    --amber:  #ffaa00;
+    --blue:   #00aaff;
+    --text:   #c8d8e8;
+    --text2:  #566878;
+    --mono:   'Share Tech Mono', monospace;
+    --disp:   'Cinzel', serif;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--text); font-family:var(--mono); min-height:100vh; overflow:hidden; }
+  body::before {
+    content:''; position:fixed; inset:0; pointer-events:none; z-index:199;
+    background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,0.08) 3px,rgba(0,0,0,0.08) 4px);
+  }
+
+  /* ── Header ── */
+  header {
+    display:grid; grid-template-columns:1fr auto 1fr; align-items:center;
+    padding:14px 28px; border-bottom:1px solid var(--border);
+    background:linear-gradient(180deg,rgba(0,255,136,0.04) 0%,transparent 100%);
+    position:relative; flex-shrink:0;
+  }
+  header::after {
+    content:''; position:absolute; bottom:0; left:0; right:0; height:1px;
+    background:linear-gradient(90deg,transparent,var(--green),transparent); opacity:0.35;
+  }
+  .hdr-left { display:flex; flex-direction:column; gap:2px; }
+  .hdr-label { font-size:9px; letter-spacing:0.2em; color:var(--text2); text-transform:uppercase; }
+  .hdr-stat  { font-size:20px; color:var(--green); letter-spacing:0.05em; }
+  .hdr-center { text-align:center; }
+  .title    { font-family:var(--disp); font-size:14px; font-weight:600; letter-spacing:0.25em; text-transform:uppercase; }
+  .subtitle { font-size:9px; letter-spacing:0.15em; color:var(--text2); text-transform:uppercase; margin-top:3px; }
+  .hdr-right { display:flex; flex-direction:column; align-items:flex-end; gap:5px; }
+  .cfg-row  { display:flex; align-items:center; gap:8px; }
+  .cfg-row label { font-size:9px; letter-spacing:0.12em; color:var(--text2); text-transform:uppercase; }
+  .cfg-row input {
+    background:var(--bg3); border:1px solid var(--bord2); color:var(--green);
+    font-family:var(--mono); font-size:11px; padding:4px 8px; border-radius:2px; width:190px; outline:none;
+  }
+  .cfg-row input:focus { border-color:var(--green); box-shadow:0 0 8px rgba(0,255,136,0.15); }
+  .btns { display:flex; gap:6px; }
+  .btn {
+    font-family:var(--mono); font-size:10px; letter-spacing:0.1em; text-transform:uppercase;
+    padding:5px 12px; border:1px solid; background:transparent; cursor:pointer; border-radius:2px; transition:all 0.2s;
+  }
+  .btn-green { border-color:var(--green); color:var(--green); }
+  .btn-green:hover,.btn-green.active { background:var(--green); color:#000; box-shadow:0 0 14px rgba(0,255,136,0.3); }
+  .btn-dim   { border-color:var(--text2); color:var(--text2); }
+  .btn-dim:hover { border-color:var(--text); color:var(--text); }
+
+  /* ── Status bar ── */
+  .sbar {
+    display:flex; align-items:center; gap:20px; padding:6px 28px;
+    background:var(--bg2); border-bottom:1px solid var(--border);
+    font-size:9px; letter-spacing:0.1em; color:var(--text2); flex-shrink:0;
+  }
+  .sdot { width:5px; height:5px; border-radius:50%; display:inline-block; margin-right:5px; }
+  .sdot.g { background:var(--green); box-shadow:0 0 5px var(--green); animation:blink 2s infinite; }
+  .sdot.a { background:var(--amber); }
+  .sdot.b { background:var(--blue); }
+  .sdot.x { background:var(--text2); }
+  .sval { color:var(--text); }
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
+
+  /* ── Body layout ── */
+  .body { display:grid; grid-template-columns:1fr 270px; height:calc(100vh - 86px); overflow:hidden; }
+
+  /* ── Map ── */
+  .map-wrap { position:relative; background:var(--bg2); border-right:1px solid var(--border); display:flex; flex-direction:column; overflow:hidden; }
+  .map-toolbar {
+    display:flex; align-items:stretch; border-bottom:1px solid var(--border); flex-shrink:0;
+  }
+  .lbtn {
+    font-family:var(--mono); font-size:10px; letter-spacing:0.1em; text-transform:uppercase;
+    padding:9px 18px; border:none; border-right:1px solid var(--border);
+    background:transparent; color:var(--text2); cursor:pointer; transition:all 0.2s; position:relative;
+  }
+  .lbtn::after { content:''; position:absolute; bottom:0; left:0; right:0; height:2px; background:transparent; transition:background 0.2s; }
+  .lbtn.kwh  { color:var(--green); } .lbtn.kwh::after  { background:var(--green); }
+  .lbtn.price{ color:var(--amber); } .lbtn.price::after{ background:var(--amber); }
+  .lbtn:hover:not(.kwh):not(.price){ color:var(--text); background:rgba(255,255,255,0.03); }
+  .map-sub { margin-left:auto; padding:0 16px; font-size:9px; color:var(--text2); letter-spacing:0.1em; display:flex; align-items:center; }
+
+  #map-canvas { flex:1; position:relative; overflow:hidden; }
+  #map-svg    { width:100%; height:100%; display:block; }
+
+  /* State paths styled by JS */
+  .state-path { transition:fill 0.4s ease, stroke 0.3s; cursor:default; }
+  .state-path:hover { stroke-width:1.2 !important; }
+
+  /* Legend */
+  .legend {
+    position:absolute; bottom:14px; left:18px;
+    background:rgba(7,10,14,0.88); border:1px solid var(--bord2);
+    border-radius:3px; padding:10px 14px; backdrop-filter:blur(6px);
+  }
+  .leg-title { font-size:9px; letter-spacing:0.13em; text-transform:uppercase; color:var(--text2); margin-bottom:7px; }
+  .leg-bar   { width:130px; height:7px; border-radius:2px; margin-bottom:4px; }
+  .leg-labs  { display:flex; justify-content:space-between; font-size:9px; color:var(--text2); }
+
+  /* Tooltip */
+  #tooltip {
+    position:absolute; pointer-events:none; display:none;
+    background:rgba(7,10,14,0.95); border:1px solid var(--bord2);
+    border-radius:3px; padding:8px 12px; font-size:10px; color:var(--text);
+    letter-spacing:0.06em; white-space:nowrap; z-index:10;
+    box-shadow:0 4px 20px rgba(0,0,0,0.5);
+  }
+  #tooltip .tt-name  { color:var(--green); font-size:11px; margin-bottom:4px; }
+  #tooltip .tt-price { color:var(--amber); }
+  #tooltip .tt-dim   { color:var(--text2); }
+
+  /* Watermark */
+  .wmark {
+    position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    font-family:var(--disp); font-size:80px; font-weight:700; letter-spacing:0.15em;
+    color:rgba(255,255,255,0.012); text-transform:uppercase; pointer-events:none;
+    white-space:nowrap; user-select:none;
+  }
+
+  /* ── Sidebar ── */
+  .sidebar { background:var(--bg2); display:flex; flex-direction:column; overflow:hidden; }
+  .sb-sec  { border-bottom:1px solid var(--border); padding:12px 15px; flex-shrink:0; }
+  .sb-ttl  { font-family:var(--disp); font-size:9px; font-weight:600; letter-spacing:0.2em; text-transform:uppercase; color:var(--text2); margin-bottom:10px; }
+  .mrow    { display:flex; justify-content:space-between; align-items:baseline; padding:4px 0; border-bottom:1px solid var(--border); }
+  .mrow:last-child { border-bottom:none; }
+  .mkey    { font-size:10px; letter-spacing:0.06em; color:var(--text2); }
+  .mval    { font-size:13px; letter-spacing:0.04em; }
+  .mval.g  { color:var(--green); }
+  .mval.a  { color:var(--amber); }
+  .mval.b  { color:var(--blue);  }
+
+  .tx-feed { flex:1; overflow-y:auto; }
+  .tx-item {
+    padding:8px 15px; border-bottom:1px solid var(--border);
+    display:grid; grid-template-columns:1fr auto; gap:2px;
+    transition:background 0.15s; animation:txIn 0.3s ease;
+  }
+  .tx-item:hover { background:rgba(255,255,255,0.02); }
+  @keyframes txIn{from{opacity:0;transform:translateX(6px)}}
+  .tx-hash  { font-size:10px; color:var(--blue); }
+  .tx-kwh   { font-size:11px; color:var(--green); text-align:right; }
+  .tx-meta  { font-size:9px; color:var(--text2); letter-spacing:0.05em; }
+  .tx-price { font-size:9px; color:var(--amber); text-align:right; }
+  ::-webkit-scrollbar{width:3px} ::-webkit-scrollbar-track{background:var(--bg)} ::-webkit-scrollbar-thumb{background:var(--bord2)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="hdr-left">
+    <div class="hdr-label">Total Energy Dispensed</div>
+    <div class="hdr-stat" id="hdrKwh">— kWh</div>
+  </div>
+  <div class="hdr-center">
+    <div class="title">Charge Coin DePIN</div>
+    <div class="subtitle">Distributed Charging Network · United States</div>
+  </div>
+  <div class="hdr-right">
+    <div class="cfg-row">
+      <label>Node</label>
+      <input type="text" id="nodeUrl" value="http://localhost:4020">
+    </div>
+    <div class="btns">
+      <button class="btn btn-green" id="liveBtn" onclick="toggleLive()">▶ Live</button>
+      <button class="btn btn-dim" onclick="fetchData()">↺ Refresh</button>
+    </div>
+  </div>
+</header>
+
+<div class="sbar">
+  <span><span class="sdot x" id="connDot"></span><span id="connLabel">not connected</span></span>
+  <span><span class="sdot a"></span>Ledger: <span class="sval" id="sbCount">—</span> transactions</span>
+  <span><span class="sdot b"></span>Blocks: <span class="sval" id="sbBlocks">—</span></span>
+  <span style="margin-left:auto"><span id="sbTs" style="font-size:9px">—</span></span>
+</div>
+
+<div class="body">
+  <div class="map-wrap">
+    <div class="map-toolbar">
+      <button class="lbtn kwh" id="btnKwh"   onclick="setLayer('kwh')">⬡ Energy (kWh)</button>
+      <button class="lbtn"     id="btnPrice" onclick="setLayer('price')">⬡ Price / kWh</button>
+      <div class="map-sub" id="mapSub">SHOWING: ENERGY DISPENSED</div>
+    </div>
+    <div id="map-canvas">
+      <div class="wmark">DePIN</div>
+      <svg id="map-svg" viewBox="0 0 960 600" preserveAspectRatio="xMidYMid meet">
+        <defs>
+          <filter id="glow">
+            <feGaussianBlur stdDeviation="3" result="blur"/>
+            <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+        <g id="states-g"></g>
+        <g id="markers-g"></g>
+      </svg>
+      <div id="tooltip">
+        <div class="tt-name" id="tt-name"></div>
+        <div id="tt-kwh"></div>
+        <div class="tt-price" id="tt-price"></div>
+        <div class="tt-dim"   id="tt-sessions"></div>
+      </div>
+      <div class="legend">
+        <div class="leg-title" id="legTitle">Energy Dispensed (kWh)</div>
+        <div class="leg-bar"   id="legBar" style="background:linear-gradient(90deg,rgba(0,255,136,0.08),rgba(0,255,136,1))"></div>
+        <div class="leg-labs"><span>Low</span><span id="legMid">—</span><span>High</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sidebar">
+    <div class="sb-sec">
+      <div class="sb-ttl">Network Summary</div>
+      <div class="mrow"><span class="mkey">Total kWh</span>        <span class="mval g" id="mKwh">—</span></div>
+      <div class="mrow"><span class="mkey">Avg kWh / session</span><span class="mval g" id="mAvgKwh">—</span></div>
+      <div class="mrow"><span class="mkey">Avg price / kWh</span>  <span class="mval a" id="mAvgPrice">—</span></div>
+      <div class="mrow"><span class="mkey">Network revenue</span>  <span class="mval a" id="mRevenue">—</span></div>
+      <div class="mrow"><span class="mkey">Active states</span>    <span class="mval b" id="mStates">—</span></div>
+      <div class="mrow"><span class="mkey">Confirmed blocks</span> <span class="mval b" id="mBlocks">—</span></div>
+    </div>
+    <div class="sb-sec" style="padding-bottom:8px"><div class="sb-ttl">Recent Sessions</div></div>
+    <div class="tx-feed" id="txFeed">
+      <div style="padding:20px;font-size:10px;color:var(--text2);text-align:center;letter-spacing:0.1em;">HIT LIVE TO BEGIN</div>
+    </div>
+  </div>
+</div>
+
+<!-- D3 for map projection + topojson for state geo data -->
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
+<script>
+// ── State name lookup ────────────────────────────────────────────────────
+const STATE_NAMES = {
+  "01":"Alabama","02":"Alaska","04":"Arizona","05":"Arkansas","06":"California",
+  "08":"Colorado","09":"Connecticut","10":"Delaware","11":"DC","12":"Florida",
+  "13":"Georgia","15":"Hawaii","16":"Idaho","17":"Illinois","18":"Indiana",
+  "19":"Iowa","20":"Kansas","21":"Kentucky","22":"Louisiana","23":"Maine",
+  "24":"Maryland","25":"Massachusetts","26":"Michigan","27":"Minnesota",
+  "28":"Mississippi","29":"Missouri","30":"Montana","31":"Nebraska","32":"Nevada",
+  "33":"New Hampshire","34":"New Jersey","35":"New Mexico","36":"New York",
+  "37":"North Carolina","38":"North Dakota","39":"Ohio","40":"Oklahoma",
+  "41":"Oregon","42":"Pennsylvania","44":"Rhode Island","45":"South Carolina",
+  "46":"South Dakota","47":"Tennessee","48":"Texas","49":"Utah","50":"Vermont",
+  "51":"Virginia","53":"Washington","54":"West Virginia","55":"Wisconsin","56":"Wyoming"
+};
+
+// Approx SVG centroids per state FIPS (for marker placement, viewBox 960x600)
+const STATE_CENTROIDS = {
+  "01":[740,400],"02":[170,480],"04":[270,360],"05":[600,360],"06":[130,310],
+  "08":[290,280],"09":[840,200],"10":[810,240],"11":[790,245],"12":[740,460],
+  "13":[720,390],"15":[190,530],"16":[220,220],"17":[560,250],"18":[590,265],
+  "19":[515,220],"20":[440,290],"21":[640,310],"22":[560,415],"23":[865,140],
+  "24":[800,235],"25":[855,178],"26":[620,200],"27":[495,155],"28":[620,385],
+  "29":[530,295],"30":[290,165],"31":[425,235],"32":[195,295],"33":[845,162],
+  "34":[820,220],"35":[310,345],"36":[800,188],"37":[735,345],"38":[410,150],
+  "39":[660,250],"40":[475,355],"41":[145,215],"42":[775,215],"44":[848,192],
+  "45":[740,368],"46":[395,185],"47":[650,340],"48":[430,405],"49":[245,275],
+  "50":[840,155],"51":[770,268],"53":[165,170],"54":[710,278],"55":[570,185],
+  "56":[325,215]
+};
+
+// ── Stations: one per state (FIPS → centroid used above) ─────────────────
+const STATION_FIPS = Object.keys(STATE_CENTROIDS).filter(f => f !== "11" && f !== "02" && f !== "15");
+
+// ── Color scales ─────────────────────────────────────────────────────────
+function kwhColor(t) {
+  // dark navy → teal → bright green
+  const r = Math.round(0   + t * 0);
+  const g = Math.round(30  + t * 225);
+  const b = Math.round(40  + t * (136 - 40));
+  return `rgb(${r},${g},${b})`;
+}
+function priceColor(t) {
+  // dark navy → deep orange → bright amber
+  const r = Math.round(10  + t * 245);
+  const g = Math.round(25  + t * 145);
+  const b = Math.round(40  + t * (-30));
+  return `rgb(${r},${Math.max(0,g)},${Math.max(0,b)})`;
+}
+
+// ── State data store ──────────────────────────────────────────────────────
+let stateData = {};   // fips → { kwh, revenue, count }
+let currentLayer = 'kwh';
+let mapReady = false;
+let liveTimer = null;
+let isLive = false;
+let lastTx = [], lastBlocks = 0;
+let pathSel;   // d3 selection of state paths
+
+// ── Load and render map ───────────────────────────────────────────────────
+async function initMap() {
+  const us = await d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json");
+  const svg = d3.select("#map-svg");
+  const g   = svg.select("#states-g");
+
+  const projection = d3.geoAlbersUsa().scale(1050).translate([480, 300]);
+  const path = d3.geoPath().projection(projection);
+  const states = topojson.feature(us, us.objects.states);
+
+  // State fills
+  pathSel = g.selectAll("path")
+    .data(states.features)
+    .enter().append("path")
+      .attr("class", "state-path")
+      .attr("d", path)
+      .attr("fill", "#0d1823")
+      .attr("stroke", "#1a2a38")
+      .attr("stroke-width", "0.5")
+      .attr("data-fips", d => d.id.toString().padStart(2,'0'))
+      .on("mousemove", function(event, d) {
+        const fips = d.id.toString().padStart(2,'0');
+        const sd = stateData[fips] || { kwh:0, revenue:0, count:0 };
+        const tt = document.getElementById('tooltip');
+        tt.style.display = 'block';
+        const rect = document.getElementById('map-canvas').getBoundingClientRect();
+        tt.style.left = (event.clientX - rect.left + 14) + 'px';
+        tt.style.top  = (event.clientY - rect.top  - 10) + 'px';
+        document.getElementById('tt-name').textContent     = STATE_NAMES[fips] || fips;
+        document.getElementById('tt-kwh').textContent      = 'Energy: ' + sd.kwh.toFixed(1) + ' kWh';
+        document.getElementById('tt-price').textContent    = sd.count ? 'Avg price: $' + (sd.revenue/sd.kwh).toFixed(4) + '/kWh' : 'No sessions';
+        document.getElementById('tt-sessions').textContent = 'Sessions: ' + sd.count;
+      })
+      .on("mouseleave", () => { document.getElementById('tooltip').style.display='none'; });
+
+  mapReady = true;
+  paintMap();
+}
+
+// ── Paint state fills based on current data & layer ───────────────────────
+function paintMap() {
+  if (!mapReady || !pathSel) return;
+
+  const vals = STATION_FIPS.map(f => {
+    const sd = stateData[f] || { kwh:0, revenue:0, count:0 };
+    return currentLayer === 'kwh' ? sd.kwh : (sd.count ? sd.revenue / sd.kwh : 0);
+  }).filter(v => v > 0);
+
+  const maxVal = vals.length ? Math.max(...vals) : 1;
+  const avgVal = vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : 0;
+
+  pathSel.transition().duration(500)
+    .attr("fill", function() {
+      const fips = this.getAttribute('data-fips');
+      const sd   = stateData[fips] || { kwh:0, revenue:0, count:0 };
+      const raw  = currentLayer === 'kwh' ? sd.kwh : (sd.count ? sd.revenue/sd.kwh : 0);
+      if (raw <= 0) return "#0d1823";
+      const t = Math.min(raw / maxVal, 1);
+      return currentLayer === 'kwh' ? kwhColor(t) : priceColor(t);
+    })
+    .attr("stroke", function() {
+      const fips = this.getAttribute('data-fips');
+      const sd   = stateData[fips] || { kwh:0, count:0 };
+      const active = currentLayer === 'kwh' ? sd.kwh > 0 : sd.count > 0;
+      return active ? (currentLayer === 'kwh' ? 'rgba(0,255,136,0.25)' : 'rgba(255,170,0,0.25)') : '#1a2a38';
+    });
+
+  // Update markers
+  const mg = d3.select("#markers-g");
+  mg.selectAll("*").remove();
+
+  STATION_FIPS.forEach(fips => {
+    const sd  = stateData[fips] || { kwh:0, revenue:0, count:0 };
+    const raw = currentLayer === 'kwh' ? sd.kwh : (sd.count ? sd.revenue/sd.kwh : 0);
+    if (raw <= 0 || !STATE_CENTROIDS[fips]) return;
+    const t = Math.min(raw / maxVal, 1);
+    const [cx, cy] = STATE_CENTROIDS[fips];
+    const color = currentLayer === 'kwh' ? '#00ff88' : '#ffaa00';
+
+    // Pulse ring
+    mg.append("circle")
+      .attr("cx", cx).attr("cy", cy)
+      .attr("r", 6 + t * 8)
+      .attr("fill","none")
+      .attr("stroke", color)
+      .attr("stroke-width","0.7")
+      .attr("opacity", 0.35 + t * 0.3);
+
+    // Core dot
+    mg.append("circle")
+      .attr("cx", cx).attr("cy", cy)
+      .attr("r", 2.5 + t * 3)
+      .attr("fill", color)
+      .attr("opacity", 0.7 + t * 0.3)
+      .attr("filter","url(#glow)");
+  });
+
+  // Legend
+  document.getElementById('legMid').textContent =
+    currentLayer === 'kwh' ? avgVal.toFixed(1)+' kWh' : '$'+avgVal.toFixed(4);
+}
+
+// ── Assign transactions to states ─────────────────────────────────────────
+function assignToStates(transactions) {
+  const sd = {};
+  STATION_FIPS.forEach(f => { sd[f] = { kwh:0, revenue:0, count:0 }; });
+
+  transactions.forEach((entry, i) => {
+    const d = entry.data || entry;
+    // Avalanche hash — mixes index and timestamp so all bits affect output,
+    // spreading assignments evenly across all states instead of clustering.
+    let h = i + 1;
+    h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
+    h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
+    h = (h ^ (h >>> 16)) >>> 0;
+    h = Math.imul(h ^ ((d.timeStamp || 0) & 0xffff), 0x9e3779b9);
+    h = (h ^ (h >>> 13)) >>> 0;
+    const idx  = h % STATION_FIPS.length;
+    const fips = STATION_FIPS[idx];
+    sd[fips].kwh     += d.kwh          || 0;
+    sd[fips].revenue += (d.kwh||0) * (d.priceperkwh||0);
+    sd[fips].count   += 1;
+  });
+
+  return sd;
+}
+
+// ── Layer toggle ──────────────────────────────────────────────────────────
+function setLayer(layer) {
+  currentLayer = layer;
+  document.getElementById('btnKwh').className   = 'lbtn' + (layer==='kwh'   ? ' kwh'   : '');
+  document.getElementById('btnPrice').className = 'lbtn' + (layer==='price' ? ' price' : '');
+  document.getElementById('mapSub').textContent   = layer==='kwh' ? 'SHOWING: ENERGY DISPENSED' : 'SHOWING: PRICE PER kWh';
+  document.getElementById('legTitle').textContent = layer==='kwh' ? 'Energy Dispensed (kWh)' : 'Price per kWh ($)';
+  document.getElementById('legBar').style.background =
+    layer==='kwh'
+      ? 'linear-gradient(90deg,rgba(0,255,136,0.08),rgba(0,255,136,1))'
+      : 'linear-gradient(90deg,rgba(255,170,0,0.08),rgba(255,170,0,1))';
+  paintMap();
+}
+
+// ── Metrics + feed ────────────────────────────────────────────────────────
+function updateMetrics(txs, blocks) {
+  if (!txs.length) return;
+  const totalKwh = txs.reduce((s,e)=>s+((e.data||e).kwh||0),0);
+  const totalRev = txs.reduce((s,e)=>{const d=e.data||e;return s+(d.kwh||0)*(d.priceperkwh||0);},0);
+  document.getElementById('hdrKwh').textContent   = totalKwh.toFixed(1)+' kWh';
+  document.getElementById('mKwh').textContent     = totalKwh.toFixed(1)+' kWh';
+  document.getElementById('mAvgKwh').textContent  = (totalKwh/txs.length).toFixed(2)+' kWh';
+  document.getElementById('mAvgPrice').textContent= '$'+(totalRev/totalKwh).toFixed(4);
+  document.getElementById('mRevenue').textContent = '$'+totalRev.toFixed(2);
+  document.getElementById('mStates').textContent  = Object.values(stateData).filter(s=>s.count>0).length;
+  document.getElementById('mBlocks').textContent  = blocks;
+  document.getElementById('sbCount').textContent  = txs.length;
+  document.getElementById('sbBlocks').textContent = blocks;
+}
+
+function updateFeed(txs) {
+  const feed = document.getElementById('txFeed');
+  if (!txs.length) {
+    feed.innerHTML='<div style="padding:20px;font-size:10px;color:var(--text2);text-align:center;letter-spacing:0.1em;">NO TRANSACTIONS YET</div>';
+    return;
+  }
+  feed.innerHTML = [...txs].reverse().slice(0,40).map((entry,i) => {
+    const d   = entry.data||entry;
+    const h   = btoa(JSON.stringify(d)).slice(0,10).toUpperCase();
+    let hs = i + 1;
+    hs = Math.imul(hs ^ (hs >>> 16), 0x45d9f3b);
+    hs = Math.imul(hs ^ (hs >>> 16), 0x45d9f3b);
+    hs = (hs ^ (hs >>> 16)) >>> 0;
+    hs = Math.imul(hs ^ ((d.timeStamp||0) & 0xffff), 0x9e3779b9);
+    hs = (hs ^ (hs >>> 13)) >>> 0;
+    const seed= hs % STATION_FIPS.length;
+    const st  = STATE_NAMES[STATION_FIPS[seed]] || '—';
+    const t   = d.timeStamp ? new Date(d.timeStamp*1000).toLocaleTimeString() : '—';
+    return `<div class="tx-item">
+      <div class="tx-hash">${h}…</div>
+      <div class="tx-kwh">${(d.kwh||0).toFixed(1)} kWh</div>
+      <div class="tx-meta">${st} · ${t}</div>
+      <div class="tx-price">$${(d.priceperkwh||0).toFixed(4)}</div>
+    </div>`;
+  }).join('');
+}
+
+// ── Fetch ─────────────────────────────────────────────────────────────────
+async function fetchData() {
+  const url = document.getElementById('nodeUrl').value.trim().replace(/\/$/,'');
+  try {
+    const [lr, cr] = await Promise.all([
+      fetch(`${url}/viewledger`),
+      fetch(`${url}/viewledger/blockchain`),
+    ]);
+    if (!lr.ok) throw new Error();
+    const ledger = await lr.json();
+    const chain  = await cr.json();
+    lastTx     = ledger.transactions || [];
+    lastBlocks = chain.blockCount    || 0;
+    stateData  = assignToStates(lastTx);
+
+    document.getElementById('connDot').className = 'sdot g';
+    document.getElementById('connLabel').textContent = 'Connected · '+url;
+    document.getElementById('sbTs').textContent = 'updated '+new Date().toLocaleTimeString();
+
+    paintMap();
+    updateMetrics(lastTx, lastBlocks);
+    updateFeed(lastTx);
+  } catch {
+    document.getElementById('connDot').className = 'sdot x';
+    document.getElementById('connLabel').textContent = 'Connection failed';
+  }
+}
+
+function toggleLive() {
+  isLive = !isLive;
+  const btn = document.getElementById('liveBtn');
+  if (isLive) { btn.textContent='■ Stop'; btn.classList.add('active'); poll(); }
+  else        { btn.textContent='▶ Live'; btn.classList.remove('active'); clearTimeout(liveTimer); }
+}
+
+function poll() {
+  if (!isLive) return;
+  fetchData().then(() => { liveTimer = setTimeout(poll, 5000); });
+}
+
+// Boot
+initMap().then(() => fetchData());
+</script>
+</body>
+</html>
