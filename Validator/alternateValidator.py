@@ -20,7 +20,7 @@ def _load_known_wallets(names):
     for name in names:
         path = f"{name}_public.pem"
         try:
-            pem = open(path, "rb").read().decode()
+            pem = open(path, "rb").read().decode().replace("\r\n", "\n").strip()
             wallets[pem] = 0
             print(f"Loaded public key: {path}")
         except FileNotFoundError:
@@ -32,8 +32,8 @@ knownWallets = _load_known_wallets(["walletA", "walletB"])
 # "self" must be an address reachable by peers (e.g. "192.168.1.10:4020")
 # so that peers know where to send vote callbacks.
 validatorAddresses = {
-    "self":       "10.0.0.45:4020",
-    "validatorA": "10.0.0.231:4020",
+    "self":       "[MY IP HERE]:4020",
+    "validatorA": "[VALIDATOR A IP HERE]:4020",
 }
 
 pending_requests = {}
@@ -52,46 +52,34 @@ def load_public_key(pem_str: str) -> rsa.PublicKey:
 
 def verify_signature(public_key_pem: str, message: dict, signature_hex: str) -> bool:
     try:
+        public_key_pem = public_key_pem.replace("\r\n", "\n").strip()
         payload = {k: v for k, v in message.items() if k != "signature"}
         message_bytes = json.dumps(payload, sort_keys=True).encode()
         signature_bytes = bytes.fromhex(signature_hex)
         pub_key = load_public_key(public_key_pem)
-
-        print(f"[verify] payload canonical: {json.dumps(payload, sort_keys=True)}")
-        print(f"[verify] signature hex (first 20): {signature_hex[:20]}")
-
         rsa.verify(message_bytes, signature_bytes, pub_key)
-        print(f"[verify] PASS")
         return True
-    except Exception as e:
-        print(f"[verify] FAIL: {e}")
+    except Exception:
         return False
+
 
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
 
 def validate_data(data: dict) -> bool:
-    wallet_key = data.get("walletKey")
+    wallet_key = data.get("walletKey", "").replace("\r\n", "\n").strip()
     kwh        = data.get("kwh")
     price      = data.get("priceperkwh")
     signature  = data.get("signature")
 
-    print(f"[validate] incoming keys: {list(data.keys())}")
-    print(f"[validate] wallet known: {wallet_key in knownWallets}")
-    print(f"[validate] kwh={kwh}, price={price}")
-
     if wallet_key not in knownWallets:
-        print("[validate] BLOCKED: unknown wallet")
         return False
     if not (0 < kwh < 200):
-        print("[validate] BLOCKED: kwh out of range")
         return False
     if price <= 0:
-        print("[validate] BLOCKED: bad price")
         return False
     if not verify_signature(wallet_key, data, signature):
-        print("[validate] BLOCKED: bad signature")
         return False
     return True
 
@@ -212,6 +200,63 @@ def check_vote():
             return ("", 205) if my_vote == "APPROVE" else ("", 206)
         except KeyError:
             return "", 404
+
+
+@app.route("/debug", methods=["GET"])
+def debug():
+    """
+    Returns a full snapshot of this node's state — useful for diagnosing
+    why two validators are disagreeing.  Hit this on both nodes and compare.
+    """
+    with state_lock:
+        pending_summary = {}
+        for h, entry in pending_requests.items():
+            pending_summary[h[:12]] = {
+                "votes": entry["votes"],
+                "walletKey_prefix": entry["data"].get("walletKey", "")[:40],
+                "kwh": entry["data"].get("kwh"),
+                "priceperkwh": entry["data"].get("priceperkwh"),
+            }
+
+        wallet_fingerprints = {
+            k[:40] + "...": v for k, v in knownWallets.items()
+        }
+
+    return jsonify({
+        "self": validatorAddresses["self"],
+        "known_wallets": wallet_fingerprints,
+        "pending_count": len(pending_summary),
+        "pending": pending_summary,
+        "confirmed_count": len(transaction_ledger),
+        "block_count": len(block_ledger),
+    }), 200
+
+
+@app.route("/debug/validate", methods=["POST"])
+def debug_validate():
+    """
+    Pass in a transaction payload and see exactly why this node
+    approves or blocks it.  Breaks down each validation check individually.
+    """
+    if not request.is_json:
+        return "", 400
+
+    data = request.get_json()
+    wallet_key = data.get("walletKey", "")
+    kwh        = data.get("kwh")
+    price      = data.get("priceperkwh")
+    signature  = data.get("signature", "")
+
+    checks = {
+        "wallet_known":       wallet_key in knownWallets,
+        "kwh_in_range":       isinstance(kwh, (int, float)) and 0 < kwh < 200,
+        "price_positive":     isinstance(price, (int, float)) and price > 0,
+        "signature_valid":    verify_signature(wallet_key, data, signature),
+        "wallet_key_prefix":  wallet_key[:40] if wallet_key else "(missing)",
+    }
+    checks["overall"] = all(v for k, v in checks.items() if k != "wallet_key_prefix")
+
+    return jsonify(checks), 200
 
 
 @app.route("/viewledger", methods=["GET"])
