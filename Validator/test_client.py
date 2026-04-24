@@ -54,7 +54,7 @@ INVALID_RATE = 0.25
 # ---------------------------------------------------------------------------
 
 def pem_string(pub_key: rsa.PublicKey) -> str:
-    return pub_key.save_pkcs1_openssl_pem().decode()
+    return pub_key.save_pkcs1().decode()
 
 
 def sign_payload(data: dict, priv_key: rsa.PrivateKey) -> str:

@@ -11,14 +11,14 @@ app = Flask(__name__)
 
 # Storage for wallet public keys (PEM strings) -> coin balance
 knownWallets = {
-    "[walletA PEM PUBLIC KEY HERE]": 0,
+    "-----BEGIN RSA PUBLIC KEY-----MEgCQQCpl8DS/uo1YF4eOReLAKCgC...": 0,
     "[walletB PEM PUBLIC KEY HERE]": 0,
 }
 
 # Storage for validator IP addresses
 validatorAddresses = {
-    "self": "[MY IP HERE]",
-    "validatorA": "[VALIDATOR A IP HERE]",
+    "self": "10.0.0.45",
+    "validatorA": "10.0.0.231",
 }
 
 # Temp storage for pending consensus votes  { hash -> {data, votes} }
@@ -40,7 +40,7 @@ BLOCK_SIZE = 3
 
 def load_public_key(pem_string: str) -> rsa.PublicKey:
     """Load an RSA public key from a PEM string."""
-    return rsa.PublicKey.load_pkcs1_openssl_pem(pem_string.encode())
+    return rsa.PublicKey.load_pkcs1(pem_string.encode())
 
 
 def verify_signature(public_key_pem: str, message: dict, signature_hex: str) -> bool:
@@ -74,6 +74,8 @@ def validate_data(data: dict) -> bool:
     if wallet_key not in knownWallets:
         return False
 
+    # FIX: original condition was inverted — `0 < kwh < 200` returned False
+    # for valid readings, blocking everything.  We want to REJECT out-of-range.
     if not (0 < kwh < 200):
         return False
 
