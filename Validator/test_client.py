@@ -29,15 +29,20 @@ import rsa
 
 VALIDATOR_URL = "http://localhost:4020"   # Primary validator endpoint
 
-# Generate a throwaway keypair for testing.
-# In a real deployment each sensor would have its own pre-registered keypair.
-print("Generating RSA keypair for test wallets...")
-(PUB_KEY_A, PRIV_KEY_A) = rsa.newkeys(512)
-(PUB_KEY_B, PRIV_KEY_B) = rsa.newkeys(512)
+# Load pre-generated keypairs from files produced by keygen.py
+def _load_wallet(name):
+    try:
+        pub  = rsa.PublicKey.load_pkcs1(open(f"{name}_public.pem",  "rb").read())
+        priv = rsa.PrivateKey.load_pkcs1(open(f"{name}_private.pem", "rb").read())
+        print(f"Loaded keypair: {name}")
+        return {"pub": pub, "priv": priv}
+    except FileNotFoundError as e:
+        print(f"ERROR: {e} — run keygen.py first")
+        raise SystemExit(1)
 
 WALLETS = {
-    "walletA": {"pub": PUB_KEY_A, "priv": PRIV_KEY_A},
-    "walletB": {"pub": PUB_KEY_B, "priv": PRIV_KEY_B},
+    "walletA": _load_wallet("walletA"),
+    "walletB": _load_wallet("walletB"),
 }
 
 # How many test transactions to send
@@ -123,10 +128,6 @@ def send(data: dict) -> int:
 
 FAULT_TYPES = ["bad_kwh", "bad_price", "bad_wallet", "bad_signature"]
 
-print(f"\nRegistering test wallet public keys with the validator...")
-print("  NOTE: For a real run, pre-populate knownWallets in validator.py")
-print(f"  walletA PEM (first 60 chars): {pem_string(PUB_KEY_A)[:60]}...")
-print(f"  walletB PEM (first 60 chars): {pem_string(PUB_KEY_B)[:60]}...\n")
 print("=" * 60)
 print(f"Sending {NUM_TRANSACTIONS} transactions to {VALIDATOR_URL}")
 print(f"  Invalid rate: {INVALID_RATE*100:.0f}%   Interval: {SEND_INTERVAL}s")
