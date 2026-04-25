@@ -1,135 +1,109 @@
 /*
- * EV Charging Station Simulator - R4 Uno WiFi
- * Reads A0 potentiometer, signs telemetry with Ed25519,
- * POSTs flat JSON to validator.
+ * EV Charging Station - Sensor Node with ECDSA-P256 / SHA-256 Signing
+ * Arduino UNO R4 WiFi
+ *
+ * Each device = one wallet (P-256 keypair).
+ * Signs telemetry with ECDSA over SHA-256 hash of the canonical payload.
+ * POSTs signed JSON to the validator.
  */
 
 #include <WiFiS3.h>
 #include <WiFiUdp.h>
 #include <ArduinoJson.h>
-#include <Ed25519.h>
+#include <SHA256.h>
+#include <uECC.h>
 
 // ---------- CONFIG ----------
-const char* WIFI_SSID     = "EnzoiPhone";
-const char* WIFI_PASSWORD = "SIDIBE223";
+const char* WIFI_SSID     = "Switchyards";
+const char* WIFI_PASSWORD = "madewithsoul";
 
-const char* VALIDATOR_HOST = "0.0.0.0";
-const uint16_t VALIDATOR_PORT = 8080;
-const char* VALIDATOR_PATH = "/";
+const char* VALIDATOR_HOST = "10.104.43.212";   // laptop IP on hotspot
+const uint16_t VALIDATOR_PORT = 4020;
+const char* VALIDATOR_PATH = "/publishdata";
 
 const float MAX_POWER_KW       = 150.0;
 const float PRICE_PER_KWH      = 0.20;
-const unsigned long SAMPLE_INTERVAL_MS = 5000;  // 5 s per sample
+const unsigned long SAMPLE_INTERVAL_MS = 5000;
 
-// Pulic key : PUBLIC KEY  (32 bytes): 0x94, 0x6C, 0x7A, 0x37, 0xE6, 0x82, 0x96, 0x86, 0x56, 0x9F, 0x89, 0xE0, 0x6D, 0x25, 0xBE, 0x67, 0x1A, 0xEC, 0xF9, 0xFB, 0xED, 0xBD, 0xDE, 0xF9, 0x1E, 0xCD, 0x82, 0xA2, 0x24, 0x3A, 0xBD, 0xCD
+// public PUBLIC KEY  (64 bytes): 0xAF, 0x4E, 0xBA, 0x34, 0x48, 0x5A, 0xE3, 0x2D, 0x0C, 0x7B, 0x44, 0x9E, 0xEB, 0x5A, 0x3E, 0xC9, 0x1B, 0x5A, 0x5A, 0xE5, 0x8B, 0x22, 0xE9, 0x29, 0x71, 0xF4, 0xAB, 0x71, 0xC6, 0x78, 0x17, 0x22, 0x98, 0x15, 0x50, 0xAF, 0x31, 0xCC, 0x73, 0x8F, 0x7D, 0x62, 0x28, 0xF6, 0xA5, 0x16, 0xB4, 0xCB, 0x9A, 0x3E, 0x78, 0x25, 0xB8, 0x8C, 0x1D, 0x18, 0x15, 0x17, 0xEF, 0x59, 0x50, 0x38, 0xFD, 0x50
 
-// 32-byte Ed25519 private seed — REPLACE with output from key-gen script
-const uint8_t PRIVATE_KEY_SEED[32] = {
-  0x3B, 0x2D, 0x4A, 0x60, 0xF9, 0xD4, 0x4C, 0x6B,
-  0xF6, 0x82, 0x6D, 0x5F, 0x35, 0xF0, 0xFE, 0xDF,
-  0xDD, 0xE2, 0x30, 0xAE, 0x4D, 0x82, 0xF1, 0x1D,
-  0x6E, 0x68, 0x67, 0x34, 0x0F, 0xCC, 0x83, 0x5D
+// 32-byte P-256 private key — REPLACE with your generated key
+const uint8_t PRIVATE_KEY[32] = {
+  0x4B, 0xF5, 0x42, 0x67, 0xA3, 
+  0x18, 0xC7, 0xB9, 0xC2, 0x4F, 
+  0x63, 0x93, 0x78, 0x67, 0x49, 
+  0x7E, 0x04, 0x15, 0x09, 0xAF, 
+  0xA6, 0x5F, 0xA4, 0x90, 0x41, 
+  0xEE, 0x93, 0xAA, 0xCE, 0x8B, 
+  0x57, 0xC2
 };
 
-// NTP
 const char* NTP_HOST = "pool.ntp.org";
 const uint16_t NTP_PORT = 123;
-const unsigned long NTP_UNIX_OFFSET = 2208988800UL;  // 1900 -> 1970
+const unsigned long NTP_UNIX_OFFSET = 2208988800UL;
 
 // ---------- GLOBALS ----------
 const int POT_PIN = A0;
-uint8_t publicKey[32];
-char walletKeyHex[65];
+uint8_t publicKey[64];        // uncompressed X || Y
+char walletKeyHex[129];       // 64 bytes -> 128 hex chars + null
 
 unsigned long lastSample = 0;
-unsigned long epochAtSync = 0;   // unix time captured at NTP sync
-unsigned long millisAtSync = 0;  // millis() value at that moment
+unsigned long epochAtSync = 0;
+unsigned long millisAtSync = 0;
 
 WiFiClient client;
 WiFiUDP udp;
+const struct uECC_Curve_t* curve = uECC_secp256r1();
+
+// ---------- RNG for uECC (required for ECDSA signing) ----------
+static int rng_function(uint8_t *dest, unsigned size) {
+  // Seed from analog noise + millis — not crypto-grade, but adequate for class project.
+  // For production, use a hardware TRNG.
+  for (unsigned i = 0; i < size; i++) {
+    uint32_t noise = 0;
+    for (int b = 0; b < 8; b++) {
+      noise = (noise << 1) | (analogRead(A5) & 1);
+      delayMicroseconds(17);
+    }
+    dest[i] = noise ^ (micros() & 0xFF);
+  }
+  return 1;
+}
 
 // ---------- HELPERS ----------
 void bytesToHex(const uint8_t* bytes, size_t len, char* out) {
   const char* hex = "0123456789abcdef";
   for (size_t i = 0; i < len; i++) {
-    out[i * 2]     = hex[(bytes[i] >> 4) & 0xF];
-    out[i * 2 + 1] = hex[bytes[i] & 0xF];
+    out[i*2]   = hex[(bytes[i] >> 4) & 0xF];
+    out[i*2+1] = hex[bytes[i] & 0xF];
   }
-  out[len * 2] = '\0';
+  out[len*2] = '\0';
 }
 
 void connectWiFi() {
-  Serial.println(F("---- WiFi diagnostic ----"));
-
-  // 1. Check firmware version of the radio module
-  String fv = WiFi.firmwareVersion();
-  Serial.print(F("Radio firmware: ")); Serial.println(fv);
-  Serial.print(F("Latest expected: ")); Serial.println(WIFI_FIRMWARE_LATEST_VERSION);
-
-  // 2. Scan for networks so we can see if the SSID is even visible
-  Serial.println(F("Scanning for networks..."));
-  int n = WiFi.scanNetworks();
-  if (n < 0) {
-    Serial.println(F("Scan failed"));
-  } else {
-    Serial.print(n); Serial.println(F(" networks found:"));
-    for (int i = 0; i < n; i++) {
-      Serial.print(F("  ["));
-      Serial.print(i);
-      Serial.print(F("] "));
-      Serial.print(WiFi.SSID(i));
-      Serial.print(F("  RSSI="));
-      Serial.print(WiFi.RSSI(i));
-      Serial.print(F(" dBm  enc="));
-      Serial.println(WiFi.encryptionType(i));
-    }
-  }
-
-  // 3. Attempt to connect with verbose status codes
-  Serial.print(F("Connecting to SSID: '"));
-  Serial.print(WIFI_SSID);
-  Serial.println(F("'"));
-
+  Serial.print(F("WiFi"));
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) {
-    delay(1000);
-    Serial.print(F("  status=")); Serial.print(WiFi.status());
-    Serial.print(F("  (")); Serial.print((millis() - start) / 1000);
-    Serial.println(F("s)"));
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.print(F("CONNECTED. IP=")); Serial.println(WiFi.localIP());
-    Serial.print(F("RSSI=")); Serial.println(WiFi.RSSI());
-  } else {
-    Serial.println(F("!! Failed to connect within 20s"));
-  }
-  Serial.println(F("-------------------------"));
+  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print('.'); }
+  Serial.print(F(" OK ")); Serial.println(WiFi.localIP());
 }
 
-// Basic NTP client — returns unix epoch seconds, or 0 on failure
 unsigned long fetchNTP() {
   uint8_t pkt[48] = {0};
-  pkt[0] = 0b11100011;  // LI=3, Version=4, Mode=3 (client)
-
+  pkt[0] = 0b11100011;
   udp.begin(2390);
   udp.beginPacket(NTP_HOST, NTP_PORT);
   udp.write(pkt, 48);
   udp.endPacket();
-
   unsigned long t0 = millis();
   while (millis() - t0 < 2000) {
     if (udp.parsePacket() >= 48) {
       udp.read(pkt, 48);
-      unsigned long secsSince1900 =
-        ((unsigned long)pkt[40] << 24) |
-        ((unsigned long)pkt[41] << 16) |
-        ((unsigned long)pkt[42] << 8)  |
-        ((unsigned long)pkt[43]);
+      unsigned long secs = ((unsigned long)pkt[40] << 24) |
+                           ((unsigned long)pkt[41] << 16) |
+                           ((unsigned long)pkt[42] << 8)  |
+                           ((unsigned long)pkt[43]);
       udp.stop();
-      return secsSince1900 - NTP_UNIX_OFFSET;
+      return secs - NTP_UNIX_OFFSET;
     }
   }
   udp.stop();
@@ -148,7 +122,7 @@ void syncTime() {
     }
     delay(1000);
   }
-  Serial.println(F("FAILED (using 0)"));
+  Serial.println(F("FAILED"));
 }
 
 unsigned long currentEpoch() {
@@ -167,42 +141,59 @@ float readPowerKW() {
 }
 
 // ---------- SAMPLE + SIGN + POST ----------
-void sampleAndSend() {
-  float powerKW = readPowerKW();
-  // energy delivered this tick = power * (interval in hours)
-  float kwh = powerKW * (SAMPLE_INTERVAL_MS / 1000.0f) / 3600.0f;
+static float sessionKwh = 0.0;
 
+void sampleAndSend() {
+  static float sessionKwh = 0.0;   // persists across calls; resets on R4 reboot
+  
+  float powerKW = readPowerKW();
+  float kwhThisTick = powerKW * (SAMPLE_INTERVAL_MS / 1000.0f) / 3600.0f;
+  sessionKwh += kwhThisTick;       // accumulate
+  
+  float kwh = sessionKwh;          // what we report
   unsigned long ts = currentEpoch();
 
-  // Build the string that gets signed: canonical, pipe-delimited
-  char signingBuf[192];
-  // Round to 6 decimals for kwh, 2 for price
-  int n = snprintf(signingBuf, sizeof(signingBuf),
-                   "%s|%lu|%.6f|%.2f",
-                   walletKeyHex, ts, kwh, PRICE_PER_KWH);
+  // 1) Canonical message to sign: walletKey|timeStamp|kwh|priceperkwh
+  char msg[320];
+  int msgLen = snprintf(msg, sizeof(msg),
+                        "%s|%lu|%.6f|%.2f",
+                        walletKeyHex, ts, kwh, PRICE_PER_KWH);
 
-  // Sign
+  // 2) SHA-256 hash of the message
+  uint8_t hash[32];
+  SHA256 sha;
+  sha.reset();
+  sha.update((const void*)msg, msgLen);
+  sha.finalize(hash, sizeof(hash));
+
+  // 3) ECDSA sign the hash -> 64-byte signature (r || s)
   uint8_t signature[64];
-  Ed25519::sign(signature, PRIVATE_KEY_SEED, publicKey,
-                (const void*)signingBuf, n);
+  if (!uECC_sign(PRIVATE_KEY, hash, sizeof(hash), signature, curve)) {
+    Serial.println(F("!! ECDSA sign failed"));
+    return;
+  }
 
   char sigHex[129];
   bytesToHex(signature, 64, sigHex);
 
-  // Build the JSON payload
+  // 4) Build JSON payload
   JsonDocument doc;
-  doc["walletKey"]    = walletKeyHex;
-  doc["timeStamp"]    = ts;
-  doc["kwh"]          = round(kwh * 1000000.0) / 1000000.0;  // 6 dp
-  doc["priceperkwh"]  = PRICE_PER_KWH;
-  doc["signature"]    = sigHex;
+  doc["walletKey"]   = walletKeyHex;
+  doc["timeStamp"]   = ts;
+  doc["kwh"]         = round(kwh * 1000000.0) / 1000000.0;
+  doc["priceperkwh"] = PRICE_PER_KWH;
+  doc["signature"]   = sigHex;
 
-  char body[768];
+  char body[1024];
   size_t bodyLen = serializeJson(doc, body, sizeof(body));
 
-  Serial.print(F("TX: ")); Serial.println(body);
+  // Pretty-print for Serial
+  char pretty[1280];
+  serializeJsonPretty(doc, pretty, sizeof(pretty));
+  Serial.println(F("TX:"));
+  Serial.println(pretty);
 
-  // POST
+  // 5) POST to validator
   if (!client.connect(VALIDATOR_HOST, VALIDATOR_PORT)) {
     Serial.println(F("!! connect failed"));
     return;
@@ -215,7 +206,6 @@ void sampleAndSend() {
   client.println();
   client.write((const uint8_t*)body, bodyLen);
 
-  // Read response
   unsigned long t0 = millis();
   while (client.connected() && (millis() - t0 < 3000)) {
     if (client.available()) {
@@ -235,8 +225,16 @@ void setup() {
 
   analogReadResolution(14);
 
-  Ed25519::derivePublicKey(publicKey, PRIVATE_KEY_SEED);
-  bytesToHex(publicKey, 32, walletKeyHex);
+  // RNG must be set before any uECC key derivation or signing
+  uECC_set_rng(&rng_function);
+
+  // Derive public key (wallet address) from private key
+  if (!uECC_compute_public_key(PRIVATE_KEY, publicKey, curve)) {
+    Serial.println(F("!! pubkey derivation failed"));
+    while (1);
+  }
+  bytesToHex(publicKey, 64, walletKeyHex);
+
   Serial.print(F("walletKey: ")); Serial.println(walletKeyHex);
 
   connectWiFi();
