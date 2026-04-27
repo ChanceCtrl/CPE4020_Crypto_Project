@@ -4,9 +4,12 @@ import hashlib
 import threading
 
 import requests
-import rsa
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+
+from ecdsa import VerifyingKey, BadSignatureError, NIST256p
+from ecdsa.util import sigdecode_string
+from hashlib import sha256
 
 app = Flask(__name__)
 CORS(app)
@@ -20,11 +23,11 @@ state_lock = threading.Lock()
 def _load_known_wallets(names):
     wallets = {}
     for name in names:
-        path = f"{name}_public.pem"
+        path = f"{name}.pub.hex"
         try:
-            pem = open(path, "rb").read().decode().replace("\r\n", "\n").strip()
-            wallets[pem] = 0
-            print(f"Loaded public key: {path}")
+            hex_key = open(path, "r").read().strip().lower()
+            wallets[hex_key] = 0
+            print(f"Loaded public key: {path} ({len(hex_key)} hex chars)")
         except FileNotFoundError:
             print(f"WARNING: {path} not found — run keygen.py first")
     return wallets
@@ -52,20 +55,44 @@ BLOCK_SIZE = 3
 # Signature verification
 # ---------------------------------------------------------------------------
 
-def load_public_key(pem_str: str) -> rsa.PublicKey:
-    return rsa.PublicKey.load_pkcs1(pem_str.encode())
+def verify_signature(public_key_hex: str, message: dict, signature_hex: str) -> bool:
+    """
+    Verify an ECDSA-P256 signature over the canonical JSON of the payload.
 
+    Canonical format: json.dumps(payload_without_signature, sort_keys=True)
+    with default Python separators (', ' and ': ').
 
-def verify_signature(public_key_pem: str, message: dict, signature_hex: str) -> bool:
+    The public key is the 64-byte raw uncompressed point (X || Y) hex-encoded.
+    The signature is 64 bytes (r || s) hex-encoded — same format as uECC_sign
+    on the Arduino.
+    """
     try:
-        public_key_pem = public_key_pem.replace("\r\n", "\n").strip()
+        # Normalize hex inputs
+        public_key_hex  = public_key_hex.strip().lower()
+        signature_hex   = signature_hex.strip().lower()
+        public_key_bytes = bytes.fromhex(public_key_hex)
+        signature_bytes  = bytes.fromhex(signature_hex)
+
+        if len(public_key_bytes) != 64:
+            print(f"[verify] FAIL: pubkey is {len(public_key_bytes)} bytes, expected 64")
+            return False
+        if len(signature_bytes) != 64:
+            print(f"[verify] FAIL: sig is {len(signature_bytes)} bytes, expected 64")
+            return False
+
+        # Build canonical JSON (matches test_client and Arduino)
         payload = {k: v for k, v in message.items() if k != "signature"}
-        message_bytes = json.dumps(payload, sort_keys=True).encode()
-        signature_bytes = bytes.fromhex(signature_hex)
-        pub_key = load_public_key(public_key_pem)
-        rsa.verify(message_bytes, signature_bytes, pub_key)
+        canonical = json.dumps(payload, sort_keys=True).encode()
+
+        vk = VerifyingKey.from_string(public_key_bytes, curve=NIST256p)
+        vk.verify(signature_bytes, canonical, hashfunc=sha256, sigdecode=sigdecode_string)
         return True
-    except Exception:
+
+    except BadSignatureError:
+        print("[verify] FAIL: bad signature")
+        return False
+    except Exception as e:
+        print(f"[verify] FAIL: {e}")
         return False
 
 
@@ -74,16 +101,28 @@ def verify_signature(public_key_pem: str, message: dict, signature_hex: str) -> 
 # ---------------------------------------------------------------------------
 
 def validate_data(data: dict) -> bool:
-    wallet_key = data.get("walletKey", "").replace("\r\n", "\n").strip()
-    kwh        = data.get("kwh")
-    price      = data.get("priceperkwh")
+    """
+    Accepts either:
+      - {kwh: float, priceperkwh: float}     (test_client.py)
+      - {kwh_milli: int, price_micro: int}   (Arduino — integer-scaled for
+                                              cross-platform JSON compatibility)
+    """
+    wallet_key = data.get("walletKey", "").strip().lower()
     signature  = data.get("signature")
+
+    # Convert integer-scaled fields to floats if present
+    if "kwh_milli" in data and "price_micro" in data:
+        kwh   = data["kwh_milli"]  / 1000.0
+        price = data["price_micro"] / 1_000_000.0
+    else:
+        kwh   = data.get("kwh")
+        price = data.get("priceperkwh")
 
     if wallet_key not in knownWallets:
         return False
-    if not (0 < kwh < 200):
+    if not (isinstance(kwh, (int, float)) and 0 < kwh < 200):
         return False
-    if price <= 0:
+    if not (isinstance(price, (int, float)) and price > 0):
         return False
     if not verify_signature(wallet_key, data, signature):
         return False
@@ -274,18 +313,26 @@ def debug_validate():
 
     data = request.get_json()
     wallet_key = data.get("walletKey", "")
-    kwh        = data.get("kwh")
-    price      = data.get("priceperkwh")
     signature  = data.get("signature", "")
 
+    if "kwh_milli" in data and "price_micro" in data:
+        kwh   = data["kwh_milli"]  / 1000.0
+        price = data["price_micro"] / 1_000_000.0
+        format_used = "arduino_integer_scaled"
+    else:
+        kwh   = data.get("kwh")
+        price = data.get("priceperkwh")
+        format_used = "float"
+
     checks = {
-        "wallet_known":      wallet_key.replace("\r\n", "\n").strip() in knownWallets,
+        "format_used":       format_used,
+        "wallet_known":      wallet_key.strip().lower() in knownWallets,
         "kwh_in_range":      isinstance(kwh, (int, float)) and 0 < kwh < 200,
         "price_positive":    isinstance(price, (int, float)) and price > 0,
         "signature_valid":   verify_signature(wallet_key, data, signature),
         "wallet_key_prefix": wallet_key[:40] if wallet_key else "(missing)",
     }
-    checks["overall"] = all(v for k, v in checks.items() if k != "wallet_key_prefix")
+    checks["overall"] = all(v for k, v in checks.items() if k not in ("wallet_key_prefix", "format_used"))
     return jsonify(checks), 200
 
 
@@ -352,7 +399,7 @@ def consensus_loop():
                 if status == "confirmed":
                     entry = pending_requests.pop(tx_hash)
                     transaction_ledger.append(entry)
-                    wallet_key = entry["data"].get("walletKey", "").replace("\r\n", "\n").strip()
+                    wallet_key = entry["data"].get("walletKey", "").strip().lower()
                     if wallet_key in knownWallets:
                         knownWallets[wallet_key] += 1
                     print(f"Confirmed: {tx_hash[:12]}...")
