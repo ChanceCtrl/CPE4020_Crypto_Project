@@ -16,7 +16,13 @@ generate new keys and load them onto the Arduino (see files for
 further instruction)
 
 The Arduino expects to receive ADC values for the current (Pin A2) and 
-voltage (Pin A1) of the charging session. Additionally, the Arduino 
+voltage (Pin A1) of the charging session.
+![Circuit-image](.readme_assets/circuit.png)
+You can either copy and past the `Embedded code` file into the arduino IDE
+or you can use platformio and the `Device` directory to download all
+depedencies, compile, and upload
+
+Additionally, the Arduino 
 needs to be given an IP addresses and port of the validator it will 
 publish data to. 
 
