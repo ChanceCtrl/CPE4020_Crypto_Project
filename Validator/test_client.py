@@ -1,15 +1,14 @@
 """
-DePIN Validator Test Client
-============================
+DePIN Validator Test Client — ECDSA P-256 edition
+==================================================
 Sends randomized sensor readings to your validator node to exercise the
-consensus pipeline.  Some readings are intentionally malformed so you can
+consensus pipeline. Some readings are intentionally malformed so you can
 observe BLOCKED votes alongside APPROVE votes.
 
 Usage:
+    pip install requests ecdsa --break-system-packages
+    python keygen.py        # only needs to be run once
     python test_client.py
-
-Requirements:
-    pip install requests rsa
 
 Configuration:
     Edit the constants below to match your setup before running.
@@ -19,12 +18,14 @@ import json
 import random
 import time
 import hashlib
+from pathlib import Path
 
 import requests
-import rsa
+from ecdsa import SigningKey, NIST256p
+from ecdsa.util import sigencode_string
 
 # ---------------------------------------------------------------------------
-# Configuration — edit these before running
+# Configuration
 # ---------------------------------------------------------------------------
 
 VALIDATOR_URL = "http://localhost:4020"   # Primary validator endpoint
@@ -32,10 +33,13 @@ VALIDATOR_URL = "http://localhost:4020"   # Primary validator endpoint
 # Load pre-generated keypairs from files produced by keygen.py
 def _load_wallet(name):
     try:
-        pub  = rsa.PublicKey.load_pkcs1(open(f"{name}_public.pem",  "rb").read())
-        priv = rsa.PrivateKey.load_pkcs1(open(f"{name}_private.pem", "rb").read())
+        priv = SigningKey.from_string(
+            Path(f"{name}.priv").read_bytes(),
+            curve=NIST256p,
+        )
+        pub_hex = Path(f"{name}.pub.hex").read_text().strip().lower()
         print(f"Loaded keypair: {name}")
-        return {"pub": pub, "priv": priv}
+        return {"priv": priv, "pub_hex": pub_hex}
     except FileNotFoundError as e:
         print(f"ERROR: {e} — run keygen.py first")
         raise SystemExit(1)
@@ -45,39 +49,30 @@ WALLETS = {
     "walletB": _load_wallet("walletB"),
 }
 
-# How many test transactions to send
 NUM_TRANSACTIONS = 20
-
-# Seconds between each send (0 = fire as fast as possible)
-SEND_INTERVAL = 1.5
-
-# Probability that a given reading will be deliberately invalid (0.0 – 1.0)
-INVALID_RATE = 0.25
+SEND_INTERVAL    = 1.5
+INVALID_RATE     = 0.25
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def pem_string(pub_key: rsa.PublicKey) -> str:
-    return pub_key.save_pkcs1().decode().replace("\r\n", "\n").strip()
-
-
-def sign_payload(data: dict, priv_key: rsa.PrivateKey) -> str:
-    """Sign the canonical JSON of data (minus the signature field)."""
+def sign_payload(data: dict, priv_key: SigningKey) -> str:
+    """Sign canonical JSON of data (minus the signature field). Returns hex."""
     payload = {k: v for k, v in data.items() if k != "signature"}
-    message_bytes = json.dumps(payload, sort_keys=True).encode()
-    sig_bytes = rsa.sign(message_bytes, priv_key, "SHA-256")
+    canonical = json.dumps(payload, sort_keys=True).encode()
+    sig_bytes = priv_key.sign(canonical, hashfunc=hashlib.sha256, sigencode=sigencode_string)
     return sig_bytes.hex()
 
 
 def make_valid_reading(wallet_name: str) -> dict:
     wallet = WALLETS[wallet_name]
     data = {
-        "walletKey": pem_string(wallet["pub"]),
-        "timeStamp": int(time.time()),
-        "kwh": round(random.uniform(1, 199), 2),       # valid range: (0, 200)
+        "walletKey":   wallet["pub_hex"],
+        "timeStamp":   int(time.time()),
+        "kwh":         round(random.uniform(1, 199), 2),
         "priceperkwh": round(random.uniform(0.05, 0.50), 4),
-        "signature": "",
+        "signature":   "",
     }
     data["signature"] = sign_payload(data, wallet["priv"])
     return data
@@ -89,22 +84,22 @@ def make_invalid_reading(fault_type: str) -> dict:
     wallet = WALLETS[wallet_name]
 
     data = {
-        "walletKey": pem_string(wallet["pub"]),
-        "timeStamp": int(time.time()),
-        "kwh": round(random.uniform(1, 199), 2),
+        "walletKey":   wallet["pub_hex"],
+        "timeStamp":   int(time.time()),
+        "kwh":         round(random.uniform(1, 199), 2),
         "priceperkwh": round(random.uniform(0.05, 0.50), 4),
-        "signature": "",
+        "signature":   "",
     }
 
     if fault_type == "bad_kwh":
-        data["kwh"] = random.choice([-5, 0, 250, 999])   # out of range
+        data["kwh"] = random.choice([-5, 0, 250, 999])
     elif fault_type == "bad_price":
-        data["priceperkwh"] = random.choice([-0.1, 0])   # non-positive
+        data["priceperkwh"] = random.choice([-0.1, 0])
     elif fault_type == "bad_wallet":
-        data["walletKey"] = "UNKNOWN_WALLET_XYZ"          # not registered
+        data["walletKey"] = "00" * 64   # 128 hex chars but not registered
     elif fault_type == "bad_signature":
         data["signature"] = sign_payload(data, wallet["priv"])
-        # Tamper with the kwh AFTER signing so the signature is invalid
+        # Tamper with kwh AFTER signing so signature is invalid
         data["kwh"] = round(data["kwh"] + 100, 2)
         return data
 
@@ -133,7 +128,7 @@ print(f"Sending {NUM_TRANSACTIONS} transactions to {VALIDATOR_URL}")
 print(f"  Invalid rate: {INVALID_RATE*100:.0f}%   Interval: {SEND_INTERVAL}s")
 print("=" * 60)
 
-stats = {"sent": 0, "valid": 0, "invalid": 0, "errors": 0}
+stats = {"valid": 0, "invalid": 0, "errors": 0}
 
 for i in range(1, NUM_TRANSACTIONS + 1):
     is_invalid = random.random() < INVALID_RATE
@@ -151,7 +146,6 @@ for i in range(1, NUM_TRANSACTIONS + 1):
 
     tx_hash = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:12]
     status = send(data)
-
     if status == -1:
         stats["errors"] += 1
 
@@ -162,8 +156,6 @@ for i in range(1, NUM_TRANSACTIONS + 1):
         time.sleep(SEND_INTERVAL)
 
 print("\n" + "=" * 60)
-print("Test run complete.")
-print(f"  Sent:    {stats['sent'] + stats['valid'] + stats['invalid']}")
 print(f"  Valid:   {stats['valid']}")
 print(f"  Invalid: {stats['invalid']}")
 print(f"  Errors:  {stats['errors']}")

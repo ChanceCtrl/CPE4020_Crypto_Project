@@ -1,29 +1,38 @@
 """
-DePIN Keygen — run this once before starting your nodes.
+DePIN ECDSA Keygen — run this once before starting your nodes.
 
-Generates RSA keypairs for walletA and walletB and saves them to .pem files.
-The validator and test client will load keys from these files at startup.
+Generates ECDSA P-256 keypairs for walletA and walletB and saves them.
+The validator and test client load keys from these files at startup;
+the Arduino's keys come out of extract_key_for_arduino.py.
 
 Usage:
+    pip install ecdsa --break-system-packages
     python keygen.py
 
-Output files:
-    walletA_public.pem   walletA_private.pem
-    walletB_public.pem   walletB_private.pem
+Output files (per wallet):
+    walletA.pub       — 64-byte raw public key (X || Y, uncompressed)
+    walletA.pub.hex   — same as above, hex-encoded (used as walletKey)
+    walletA.priv      — 32-byte raw private key (KEEP SECRET)
 """
 
-import rsa
+from ecdsa import SigningKey, NIST256p
 from pathlib import Path
 
 WALLETS = ["walletA", "walletB"]
-KEY_SIZE = 512  # fine for a PoC; use 2048+ in production
 
 for name in WALLETS:
-    print(f"Generating {KEY_SIZE}-bit keypair for {name}...")
-    pub, priv = rsa.newkeys(KEY_SIZE)
+    print(f"Generating P-256 keypair for {name}...")
+    sk = SigningKey.generate(curve=NIST256p)
+    vk = sk.verifying_key
 
-    Path(f"{name}_public.pem").write_bytes(pub.save_pkcs1())
-    Path(f"{name}_private.pem").write_bytes(priv.save_pkcs1())
-    print(f"  Saved {name}_public.pem and {name}_private.pem")
+    priv_bytes = sk.to_string()              # 32 bytes
+    pub_bytes  = vk.to_string()              # 64 bytes (X || Y)
+    pub_hex    = pub_bytes.hex()             # 128 chars
 
-print("\nDone. Keep the private keys secure and do not commit them to git.")
+    Path(f"{name}.priv").write_bytes(priv_bytes)
+    Path(f"{name}.pub").write_bytes(pub_bytes)
+    Path(f"{name}.pub.hex").write_text(pub_hex)
+    print(f"  Saved {name}.priv (32 bytes), {name}.pub (64 bytes), {name}.pub.hex")
+
+print("\nDone. Distribute walletA.pub.hex (and walletB.pub.hex) to all validator")
+print("nodes. Keep .priv files secret — do not commit them to git.")
